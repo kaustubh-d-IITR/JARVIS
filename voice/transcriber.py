@@ -1,6 +1,6 @@
 import asyncio
 import os
-from deepgram import DeepgramClient, PrerecordedOptions, FileSource
+import requests
 from config.settings import settings
 from utils.logger import get_logger
 
@@ -15,31 +15,25 @@ class AudioTranscriber:
         if not api_key:
             return "Error: Deepgram API key not configured."
             
-        deepgram = DeepgramClient(api_key)
-            
         try:
-            with open(file_path, "rb") as audio:
-                buffer_data = audio.read()
-
-            payload: FileSource = {
-                "buffer": buffer_data,
+            url = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true"
+            headers = {
+                "Authorization": f"Token {api_key}",
+                "Content-Type": "audio/wav"
             }
-
-            options = PrerecordedOptions(
-                model="nova-2",
-                smart_format=True,
-            )
-
-            # Deepgram SDK allows async calling if needed, but we'll run it in a thread 
-            # to avoid blocking if the sync client is used. The SDK supports `listen.prerecorded.v("1")`
-            # For simplicity in Streamlit, we can just run the sync call in an executor or use asyncio.to_thread
-            response = await asyncio.to_thread(
-                deepgram.listen.prerecorded.v("1").transcribe_file,
-                payload,
-                options
-            )
             
-            transcript = response.results.channels[0].alternatives[0].transcript
+            # Read file and send POST request in a thread to avoid blocking async loop
+            def fetch_transcription():
+                with open(file_path, "rb") as audio:
+                    return requests.post(url, headers=headers, data=audio)
+            
+            response = await asyncio.to_thread(fetch_transcription)
+            
+            if response.status_code == 200:
+                data = response.json()
+                transcript = data["results"]["channels"][0]["alternatives"][0]["transcript"]
+            else:
+                transcript = f"Error: Deepgram API returned {response.status_code} - {response.text}"
             
             # Clean up temp file
             try:
