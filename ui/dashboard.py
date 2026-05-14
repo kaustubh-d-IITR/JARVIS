@@ -45,8 +45,18 @@ def log_system(msg: str):
     if len(st.session_state.system_logs) > 20:
         st.session_state.system_logs.pop()
 
+@st.cache_resource(show_spinner="Downloading AI Vision Models... (This takes ~30 seconds on first boot)")
+def preload_models():
+    import numpy as np
+    from vision.emotion_detector import EmotionDetector
+    # Force deepface to download weights on the main thread so it doesn't block the WebRTC connection timeout!
+    detector = EmotionDetector()
+    detector.detect_emotion(np.zeros((224, 224, 3), dtype=np.uint8))
+    return True
+
 def render_dashboard():
     st.set_page_config(page_title="JARVIS AI Assistant", layout="wide", initial_sidebar_state="expanded")
+    preload_models()
     initialize_session_state()
     
     # ------------------
