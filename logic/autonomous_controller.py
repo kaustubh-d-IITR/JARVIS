@@ -18,20 +18,31 @@ class AutonomousController:
         
         # Thread-safe state for the Streamlit UI to poll
         self.latest_suggestion = None
+        
+        # Internal state
+        self.current_emotion = "neutral"
+        self.current_confidence = 0.0
+        self.current_posture = "unknown"
+        self.current_weather = {}
+        
         self.lock = threading.Lock()
         
-    def start(self, get_current_state_cb):
-        """
-        Starts the background loop. 
-        get_current_state_cb should return (emotion, confidence, posture, weather)
-        """
+    def update_state(self, emotion, confidence, posture, weather):
+        with self.lock:
+            self.current_emotion = emotion
+            self.current_confidence = confidence
+            self.current_posture = posture
+            self.current_weather = weather
+            
+    def start(self):
+        """Starts the background loop."""
         if self.is_running:
             return
         self.is_running = True
-        self.thread = threading.Thread(target=self._loop, args=(get_current_state_cb,), daemon=True)
+        self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
         
-    def _loop(self, get_current_state_cb):
+    def _loop(self):
         logger.info("Autonomous controller background loop started.")
         while self.is_running:
             time.sleep(5) # Poll state every 5 seconds
@@ -40,7 +51,11 @@ class AutonomousController:
             if now - self.last_action_time < self.cooldown:
                 continue # In cooldown
                 
-            emotion, confidence, posture, weather = get_current_state_cb()
+            with self.lock:
+                emotion = self.current_emotion
+                confidence = self.current_confidence
+                posture = self.current_posture
+                weather = self.current_weather
             
             # Use decision engine to see if an action should be suggested
             decision = self.decision_engine.evaluate_autonomous_state(emotion, confidence, posture, weather)

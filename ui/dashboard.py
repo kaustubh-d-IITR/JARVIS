@@ -45,15 +45,6 @@ def log_system(msg: str):
     if len(st.session_state.system_logs) > 20:
         st.session_state.system_logs.pop()
 
-def get_current_state_for_autonomous():
-    """Callback for the background autonomous thread."""
-    return (
-        st.session_state.current_emotion,
-        st.session_state.emotion_confidence,
-        st.session_state.current_posture,
-        st.session_state.weather
-    )
-
 def render_dashboard():
     st.set_page_config(page_title="JARVIS AI Assistant", layout="wide", initial_sidebar_state="expanded")
     initialize_session_state()
@@ -69,7 +60,7 @@ def render_dashboard():
         auto_toggle = st.toggle("Enable JARVIS Brain", value=st.session_state.autonomous_mode)
         
         if auto_toggle and not st.session_state.autonomous_mode:
-            st.session_state.autonomous.start(get_current_state_for_autonomous)
+            st.session_state.autonomous.start()
             st.session_state.autonomous_mode = True
             log_system("Autonomous mode started.")
         elif not auto_toggle and st.session_state.autonomous_mode:
@@ -164,6 +155,9 @@ def render_dashboard():
                 st.session_state.current_emotion = emotion
                 st.session_state.emotion_confidence = conf
                 st.session_state.current_posture = posture
+                
+                if 'autonomous' in st.session_state:
+                    st.session_state.autonomous.update_state(emotion, conf, posture, st.session_state.weather)
                 
                 stat1, stat2 = st.columns(2)
                 stat1.metric("Detected Emotion", f"{emotion.capitalize()}", f"{int(conf*100)}% conf")
