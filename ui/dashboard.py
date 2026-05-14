@@ -1,31 +1,23 @@
 import streamlit as st
-import cv2
 import asyncio
 import time
+import hashlib
 from config.settings import settings
-from vision.emotion_detector import EmotionDetector
-from vision.posture_detector import PostureDetector
-from vision.camera_manager import CameraManager
-from voice.recorder import AudioRecorder
-from voice.transcriber import AudioTranscriber
 from llm.groq_client import GroqClient
 from spotify.spotify_controller import SpotifyController
 from weather.weather_service import WeatherService
 from logic.decision_engine import DecisionEngine
 from logic.autonomous_controller import AutonomousController
-import startup_check
+from voice.transcriber import AudioTranscriber
+
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from vision.webrtc_processor import JarvisVideoProcessor
+from audio_recorder_streamlit import audio_recorder
 
 def initialize_session_state():
     """Initialize all Streamlit session state variables to prevent reset on rerun."""
     if 'initialized' not in st.session_state:
         # Core Services
-        st.session_state.emotion_detector = EmotionDetector(skip_frames=5)
-        st.session_state.posture_detector = PostureDetector()
-        st.session_state.camera_manager = CameraManager(
-            st.session_state.posture_detector,
-            st.session_state.emotion_detector
-        )
-        st.session_state.recorder = AudioRecorder()
         st.session_state.transcriber = AudioTranscriber()
         st.session_state.groq = GroqClient()
         st.session_state.spotify = SpotifyController()
@@ -42,12 +34,8 @@ def initialize_session_state():
         
         st.session_state.chat_history = []
         st.session_state.system_logs = []
-        st.session_state.is_recording = False
         st.session_state.autonomous_mode = False
-        st.session_state.camera_running = False
-        
-        # Hardware
-        st.session_state.has_camera = startup_check.check_camera()
+        st.session_state.last_audio_hash = None
         
         st.session_state.initialized = True
 
@@ -65,11 +53,6 @@ def get_current_state_for_autonomous():
         st.session_state.current_posture,
         st.session_state.weather
     )
-
-def release_camera():
-    if 'camera_manager' in st.session_state:
-        st.session_state.camera_manager.stop()
-    st.session_state.camera_running = False
 
 def render_dashboard():
     st.set_page_config(page_title="JARVIS AI Assistant", layout="wide", initial_sidebar_state="expanded")
@@ -112,11 +95,6 @@ def render_dashboard():
         for log in st.session_state.system_logs:
             log_container.text(log)
             
-        st.divider()
-        if st.button("🔌 Release Camera"):
-            release_camera()
-            log_system("Camera forcefully released.")
-
     # ------------------
     # MAIN BODY
     # ------------------
@@ -132,10 +110,6 @@ def render_dashboard():
         st.warning(f"⚠️ Missing API Keys in .env: {', '.join(missing_keys)}")
         with st.expander("Show .env Debug Logs"):
             st.json(settings.DEBUG_INFO)
-            st.write("Loaded OS Environment Variables (Snippet):")
-            for key in ["SPOTIFY_CLIENT_ID", "DEEPGRAM_API_KEY", "GROQ_API_KEY", "OPENWEATHER_API_KEY"]:
-                st.write(f"- `{key}`: `{'FOUND' if getattr(settings, key) else 'MISSING'}`")
-            st.write(f"Current Working Directory: `{__import__('os').getcwd()}`")
 
     # Weather Widget
     w = st.session_state.weather
@@ -163,45 +137,55 @@ def render_dashboard():
                 st.rerun()
 
     # ------------------
-    # UNIFIED USER PERCEPTION
+    # CLOUD USER PERCEPTION
     # ------------------
-    st.subheader("👁️ Live User Perception")
+    st.subheader("👁️ Live Cloud Perception")
     
-    if not st.session_state.get('has_camera', False):
-        st.warning(f"No camera detected at index {settings.CAMERA_INDEX}. Vision capabilities are disabled.")
-        camera_disabled = True
-    else:
-        camera_disabled = False
+    col_vision, col_chat = st.columns([1, 1])
 
-    col_controls1, col_controls2, _ = st.columns([1, 1, 2])
-    with col_controls1:
-        if not st.session_state.camera_running:
-            if st.button("👁️ Start Perception (Camera)", use_container_width=True, disabled=camera_disabled):
-                success = st.session_state.camera_manager.start()
-                if success:
-                    st.session_state.camera_running = True
-                    st.rerun()
-                else:
-                    st.error("Failed to start camera thread. It may be locked by another app.")
-        else:
-            if st.button("🛑 Stop Perception", use_container_width=True):
-                release_camera()
-                st.rerun()
+    with col_vision:
+        # WebRTC Streamer
+        ctx = webrtc_streamer(
+            key="jarvis-vision",
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=JarvisVideoProcessor,
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        )
+
+        if ctx.state.playing and ctx.video_processor:
+            @st.fragment(run_every=1.0)
+            def render_metrics():
+                emotion = getattr(ctx.video_processor, 'latest_emotion', 'neutral')
+                conf = getattr(ctx.video_processor, 'latest_emotion_conf', 0.0)
+                posture = getattr(ctx.video_processor, 'latest_posture', 'unknown')
                 
-    with col_controls2:
-        if st.button("🎙️ Speak to JARVIS" if not st.session_state.is_recording else "🛑 Stop Recording", type="primary", use_container_width=True):
-            if not st.session_state.is_recording:
-                st.session_state.recorder.start_recording()
-                st.session_state.is_recording = True
-                log_system("Started voice recording.")
-                st.rerun()
-            else:
-                wav_path = st.session_state.recorder.stop_recording()
-                st.session_state.is_recording = False
-                log_system("Stopped voice recording. Processing...")
+                st.session_state.current_emotion = emotion
+                st.session_state.emotion_confidence = conf
+                st.session_state.current_posture = posture
                 
+                stat1, stat2 = st.columns(2)
+                stat1.metric("Detected Emotion", f"{emotion.capitalize()}", f"{int(conf*100)}% conf")
+                stat2.metric("Body Posture", f"{posture.capitalize()}")
+                
+            render_metrics()
+            
+        st.divider()
+        st.subheader("🎙️ Speak to JARVIS")
+        audio_bytes = audio_recorder(text="Click to record voice command", recording_color="#e8b320", neutral_color="#6aa36f", icon_name="microphone")
+        
+        if audio_bytes:
+            audio_hash = hashlib.md5(audio_bytes).hexdigest()
+            if st.session_state.get('last_audio_hash') != audio_hash:
+                st.session_state.last_audio_hash = audio_hash
+                
+                log_system("Voice received from browser. Processing...")
+                with open("temp_audio.wav", "wb") as f:
+                    f.write(audio_bytes)
+                    
                 with st.spinner("Transcribing via Deepgram..."):
-                    transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async(wav_path))
+                    transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async("temp_audio.wav"))
                     
                 st.session_state.chat_history.append({"role": "user", "text": transcript})
                 
@@ -218,41 +202,10 @@ def render_dashboard():
                         log_system(f"Action: {result['action_msg']}")
                 st.rerun()
 
-    st.divider()
-
-    # ------------------
-    # DISPLAY AREAS
-    # ------------------
-    col_vision, col_chat = st.columns([1, 1])
-
-    with col_vision:
-        # Camera Fragment
-        @st.fragment(run_every=0.5)
-        def render_camera_stream():
-            if st.session_state.camera_running:
-                frame, emotion, conf, posture, status = st.session_state.camera_manager.get_latest_data()
-                
-                if frame is not None:
-                    st.image(frame, channels="RGB", use_container_width=True)
-                    
-                    stat1, stat2 = st.columns(2)
-                    stat1.metric("Detected Emotion", f"{emotion.capitalize()}", f"{int(conf*100)}% conf")
-                    stat2.metric("Body Posture", f"{posture.capitalize()}")
-                    
-                    st.session_state.current_emotion = emotion
-                    st.session_state.emotion_confidence = conf
-                    st.session_state.current_posture = posture
-                else:
-                    st.info(f"⏳ **Thread Status:** {status}")
-            else:
-                st.info("Camera is currently off. Click 'Start Perception' to begin.")
-                
-        render_camera_stream()
-
     with col_chat:
         # Chat History
         st.subheader("💬 Interaction History")
-        chat_container = st.container(height=400)
+        chat_container = st.container(height=500)
         for chat in st.session_state.chat_history:
             if chat["role"] == "user":
                 chat_container.chat_message("user").write(chat["text"])
