@@ -1,0 +1,22 @@
+# Environment variables
+.env
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# System
+.DS_Store
+Thumbs.db
+Desktop.ini
