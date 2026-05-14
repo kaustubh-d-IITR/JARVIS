@@ -1,5 +1,5 @@
 streamlit>=1.30.0
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 deepface>=0.0.79
 mediapipe>=0.10.9
 deepgram-sdk>=3.0.0
