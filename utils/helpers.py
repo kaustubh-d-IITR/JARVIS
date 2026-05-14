@@ -1,27 +1,6 @@
-import pyaudio
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-def list_audio_devices():
-    """
-    Lists all available PyAudio input devices for debugging.
-    """
-    p = pyaudio.PyAudio()
-    info = p.get_host_api_info_by_index(0)
-    numdevices = info.get('deviceCount')
-    
-    devices = []
-    for i in range(0, numdevices):
-        if (p.get_device_info_by_host_api_device_index(0, i).get('maxInputChannels')) > 0:
-            dev_info = p.get_device_info_by_host_api_device_index(0, i)
-            devices.append({
-                "index": i,
-                "name": dev_info.get('name')
-            })
-            logger.info(f"Input Device id {i} - {dev_info.get('name')}")
-    p.terminate()
-    return devices
 
 def get_spotify_playlist_for_emotion(emotion: str) -> str:
     """
