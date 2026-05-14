@@ -33,6 +33,7 @@ class EmotionDetector:
                 frame, 
                 actions=['emotion'], 
                 enforce_detection=False,
+                detector_backend='opencv',
                 silent=True
             )
             
