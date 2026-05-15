@@ -58,6 +58,8 @@ def preload_models():
 
 def render_dashboard():
     st.set_page_config(page_title="JARVIS AI Assistant", layout="wide", initial_sidebar_state="expanded")
+    if "video_processor" not in st.session_state:
+        st.session_state.video_processor = JarvisVideoProcessor()
     preload_models()
     initialize_session_state()
     
@@ -148,6 +150,8 @@ def render_dashboard():
 
     with col_vision:
         # OpenCV Camera Feed
+        if "video_processor" not in st.session_state:
+            st.session_state.video_processor = JarvisVideoProcessor()
         vp = st.session_state.video_processor
 
         col_btn1, col_btn2 = st.columns([1, 1])
