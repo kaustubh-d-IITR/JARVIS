@@ -69,4 +69,8 @@ class Settings:
     def DEBUG_INFO(self):
         return DEBUG_INFO
 
+    @property
+    def FER_CHECKPOINT_PATH(self) -> str:
+        return os.getenv("FER_CHECKPOINT_PATH", "vision/fer_checkpoint.tar")
+
 settings = Settings()

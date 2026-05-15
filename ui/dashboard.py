@@ -10,7 +10,6 @@ from logic.decision_engine import DecisionEngine
 from logic.autonomous_controller import AutonomousController
 from voice.transcriber import AudioTranscriber
 
-from streamlit_webrtc import webrtc_streamer
 from vision.webrtc_processor import JarvisVideoProcessor
 from audio_recorder_streamlit import audio_recorder
 
@@ -36,6 +35,7 @@ def initialize_session_state():
         st.session_state.system_logs = []
         st.session_state.autonomous_mode = False
         st.session_state.last_audio_hash = None
+        st.session_state.video_processor = JarvisVideoProcessor()
         
         st.session_state.initialized = True
 
@@ -45,11 +45,11 @@ def log_system(msg: str):
     if len(st.session_state.system_logs) > 20:
         st.session_state.system_logs.pop()
 
-@st.cache_resource(show_spinner="Downloading AI Vision Models... (This takes ~30 seconds on first boot)")
+@st.cache_resource(show_spinner="Loading AI Vision Models... (This takes ~10 seconds on first boot)")
 def preload_models():
     import numpy as np
     from vision.emotion_detector import EmotionDetector
-    # Force deepface to download weights on the main thread so it doesn't block the WebRTC connection timeout!
+    # Force PyTorch model to load weights on the main thread
     detector = EmotionDetector()
     detector.detect_emotion(np.zeros((224, 224, 3), dtype=np.uint8))
     return True
@@ -153,56 +153,79 @@ def render_dashboard():
                 st.rerun()
 
     # ------------------
-    # CLOUD USER PERCEPTION
+    # LOCAL USER PERCEPTION
     # ------------------
-    st.subheader("👁️ Live Cloud Perception")
+    st.subheader("👁️ Live Local Perception")
     
     col_vision, col_chat = st.columns([1, 1])
 
     with col_vision:
-        # WebRTC Camera Feed (browser-side capture)
-        ctx = webrtc_streamer(
-            key="jarvis-webcam",
-            video_processor_factory=JarvisVideoProcessor,
-            rtc_configuration={
-                "iceServers": [
-                    {"urls": "stun:stun.l.google.com:19302"},
-                    {"urls": "stun:stun1.l.google.com:19302"},
-                    {"urls": "stun:stun2.l.google.com:19302"},
-                    {
-                        "urls": "turn:openrelay.metered.ca:80",
-                        "username": "openrelayproject",
-                        "credential": "openrelayproject"
-                    },
-                    {
-                        "urls": "turn:openrelay.metered.ca:443",
-                        "username": "openrelayproject",
-                        "credential": "openrelayproject"
-                    }
-                ]
-            },
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-        )
+        # Ensure video_processor exists
+        if "video_processor" not in st.session_state:
+            st.session_state.video_processor = JarvisVideoProcessor()
+        vp = st.session_state.video_processor
+
+        # Camera control buttons
+        col_start, col_stop = st.columns([1, 1])
+        with col_start:
+            if not vp._running:
+                if st.button("▶ START Camera", type="primary", key="cam_start"):
+                    vp.start()
+                    st.rerun()
+        with col_stop:
+            if vp._running:
+                if st.button("⏹ STOP Camera", key="cam_stop"):
+                    vp.stop()
+                    st.rerun()
+
+        # Live feed display
+        if vp._running:
+            frame = vp.get_frame()
+            if frame is not None:
+                st.image(
+                    frame,
+                    channels="RGB",
+                    use_container_width=True,
+                    caption="Live Perception Feed"
+                )
+            else:
+                st.info("⏳ Initializing camera and loading AI model...")
+        else:
+            st.info("Click START Camera to begin emotion detection.")
 
         @st.fragment(run_every=1.0)
         def render_metrics():
-            if ctx is None or not ctx.state.playing:
+            if "video_processor" not in st.session_state:
                 return
-            if ctx.video_processor is None:
+            vp = st.session_state.video_processor
+            if not vp._running:
                 return
-            emotion = getattr(ctx.video_processor, 'latest_emotion', 'neutral')
-            conf = getattr(ctx.video_processor, 'latest_emotion_conf', 0.0)
-            posture = getattr(ctx.video_processor, 'latest_posture', 'unknown')
+
+            emotion, conf, posture = vp.get_state()
+
+            # Update session state
             st.session_state.current_emotion = emotion
             st.session_state.emotion_confidence = conf
             st.session_state.current_posture = posture
-            if 'autonomous' in st.session_state:
-                st.session_state.autonomous.update_state(emotion, conf, posture, st.session_state.weather)
+
+            # Update autonomous controller
+            if "autonomous" in st.session_state:
+                st.session_state.autonomous.update_state(
+                    emotion=emotion,
+                    confidence=conf,
+                    posture=posture,
+                    weather=st.session_state.get("weather", {})
+                )
+
+            # Display metrics
             col1, col2, col3 = st.columns(3)
-            col1.metric("Emotion", emotion)
+            col1.metric("Emotion", emotion.capitalize())
             col2.metric("Confidence", f"{conf:.0%}")
-            col3.metric("Posture", posture)
+            col3.metric("Posture", posture.capitalize())
+
+            # Emotion context caption
+            st.caption(f"Dominant emotion over last 3 seconds: "
+                       f"**{emotion}** at {conf:.0%} confidence")
         render_metrics()
             
         st.divider()
