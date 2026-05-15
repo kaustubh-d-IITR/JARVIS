@@ -220,6 +220,14 @@ def render_dashboard():
         st.caption("🎙️ Click mic → speak your command → click again to stop. "
                    "For best results, lower speaker volume while recording.")
         
+        # Show last transcript
+        last_transcript = st.session_state.get("last_transcript", "")
+        if last_transcript:
+            st.markdown("**🎙️ JARVIS heard:**")
+            st.info(f'"{last_transcript}"')
+        else:
+            st.caption("Your voice command will appear here after recording.")
+
         # Reject recordings that are too short to be a real command
         # Real speech is at least 0.5 seconds = ~8000 bytes at 16kHz
         if audio_bytes is not None and len(audio_bytes) < 8000:
@@ -233,6 +241,7 @@ def render_dashboard():
             if st.session_state.get('last_audio_hash') != audio_hash:
                 st.session_state.last_audio_hash = audio_hash
                 st.session_state.processing_voice = True
+                st.session_state.last_transcript = "⏳ Transcribing..."
                 try:
                     log_system("Voice received from browser. Processing...")
                     with open("temp_audio.wav", "wb") as f:
@@ -240,6 +249,8 @@ def render_dashboard():
                     
                     with st.spinner("Transcribing via Deepgram..."):
                         transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async("temp_audio.wav"))
+                    
+                    st.session_state.last_transcript = transcript
                     
                     # Only process non-empty transcripts
                     if transcript and transcript.strip() and not transcript.startswith("Error"):
@@ -268,6 +279,6 @@ def render_dashboard():
         chat_container = st.container(height=500)
         for chat in st.session_state.chat_history:
             if chat["role"] == "user":
-                chat_container.chat_message("user").write(chat["text"])
+                chat_container.chat_message("user").write(f"🎙️ {chat['text']}")
             else:
                 chat_container.chat_message("assistant").write(chat["text"])
