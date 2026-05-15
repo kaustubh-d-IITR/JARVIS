@@ -6,7 +6,14 @@ Run this before starting the application.
 import sys
 import os
 
-# ─── Color helpers for terminal output ───
+# Force UTF-8 output on Windows (prevents cp1252 encoding errors)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# Color helpers for terminal output
 class C:
     GREEN  = "\033[92m"
     RED    = "\033[91m"
@@ -15,11 +22,11 @@ class C:
     BOLD   = "\033[1m"
     RESET  = "\033[0m"
 
-def ok(msg):    print(f"  {C.GREEN}✓ PASS{C.RESET}  {msg}")
-def fail(msg):  print(f"  {C.RED}✗ FAIL{C.RESET}  {msg}")
-def warn(msg):  print(f"  {C.YELLOW}⚠ WARN{C.RESET}  {msg}")
-def info(msg):  print(f"  {C.CYAN}ℹ INFO{C.RESET}  {msg}")
-def header(msg): print(f"\n{C.BOLD}{C.CYAN}{'═'*50}\n  {msg}\n{'═'*50}{C.RESET}")
+def ok(msg):    print(f"  {C.GREEN}[PASS]{C.RESET}  {msg}")
+def fail(msg):  print(f"  {C.RED}[FAIL]{C.RESET}  {msg}")
+def warn(msg):  print(f"  {C.YELLOW}[WARN]{C.RESET}  {msg}")
+def info(msg):  print(f"  {C.CYAN}[INFO]{C.RESET}  {msg}")
+def header(msg): print(f"\n{C.BOLD}{C.CYAN}{'='*50}\n  {msg}\n{'='*50}{C.RESET}")
 
 def main():
     errors = 0
@@ -139,7 +146,9 @@ def main():
         ckpt_path = "vision/fer_checkpoint.tar"
         device = torch.device("cpu")
         ckpt = torch.load(ckpt_path, map_location=device)
-        if "net" in ckpt:
+        if "model_state_dict" in ckpt:
+            model.load_state_dict(ckpt["model_state_dict"])
+        elif "net" in ckpt:
             model.load_state_dict(ckpt["net"])
         elif "state_dict" in ckpt:
             model.load_state_dict(ckpt["state_dict"])
@@ -215,15 +224,15 @@ def main():
     if not found_stale:
         ok("No stale imports detected")
 
-    # ─── Summary ───
+    # Summary
     header("VALIDATION SUMMARY")
     print()
     if errors == 0 and warnings == 0:
-        print(f"  {C.GREEN}{C.BOLD}🚀 ALL CHECKS PASSED — Ready to launch!{C.RESET}")
+        print(f"  {C.GREEN}{C.BOLD}>> ALL CHECKS PASSED -- Ready to launch!{C.RESET}")
     elif errors == 0:
-        print(f"  {C.YELLOW}{C.BOLD}⚠ {warnings} warning(s), 0 errors — Can launch with reduced features.{C.RESET}")
+        print(f"  {C.YELLOW}{C.BOLD}>> {warnings} warning(s), 0 errors -- Can launch with reduced features.{C.RESET}")
     else:
-        print(f"  {C.RED}{C.BOLD}✗ {errors} error(s), {warnings} warning(s) — Fix errors before launching.{C.RESET}")
+        print(f"  {C.RED}{C.BOLD}>> {errors} error(s), {warnings} warning(s) -- Fix errors before launching.{C.RESET}")
     print()
 
     return errors

@@ -46,9 +46,10 @@ class EmotionDetector:
                 checkpoint_path,
                 map_location=self.device
             )
-            # The checkpoint is saved as a dict with 'net' key
-            # Try multiple common key names
-            if 'net' in checkpoint:
+            # The checkpoint is saved as a dict with various possible key names
+            if 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            elif 'net' in checkpoint:
                 state_dict = checkpoint['net']
             elif 'state_dict' in checkpoint:
                 state_dict = checkpoint['state_dict']
