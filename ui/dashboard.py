@@ -59,6 +59,18 @@ def render_dashboard():
     preload_models()
     initialize_session_state()
     
+    # Handle Spotify OAuth callback
+    query_params = st.query_params
+    if "code" in query_params:
+        code = query_params["code"]
+        spotify = st.session_state.get("spotify")
+        if spotify and not spotify.is_authenticated():
+            success = spotify.handle_callback(code)
+            if success:
+                st.query_params.clear()
+                st.success("Spotify connected successfully!")
+                st.rerun()
+    
     # ------------------
     # SIDEBAR: Settings & Logs
     # ------------------
@@ -79,16 +91,19 @@ def render_dashboard():
             log_system("Autonomous mode stopped.")
             
         st.divider()
-        st.subheader("🎶 Spotify Auth")
-        if not st.session_state.spotify.is_authenticated():
-            url = st.session_state.spotify.get_auth_url()
-            if url:
-                st.error("Not Authenticated")
-                st.markdown(f"[Login to Spotify]({url})")
-        else:
-            st.success("Authenticated")
-            if st.button("⏯️ Play/Pause Music"):
-                st.session_state.spotify.play_music()
+        st.subheader("🎶 Spotify")
+        spotify = st.session_state.get("spotify")
+        if spotify:
+            if spotify.is_authenticated():
+                st.success("Spotify connected")
+            else:
+                auth_url = spotify.get_auth_url()
+                if auth_url:
+                    st.warning("Spotify not connected")
+                    st.markdown(f"[Connect Spotify]({auth_url})")
+                    st.caption("Click above, then come back here after authorizing.")
+                else:
+                    st.error("Spotify API keys missing in .env")
 
         st.divider()
         st.subheader("🖥️ System Logs")

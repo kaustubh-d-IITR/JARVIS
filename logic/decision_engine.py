@@ -57,12 +57,21 @@ class DecisionEngine:
             action_taken = True
             
         # Generate conversational response AFTER action so LLM knows what happened
-        context_prompt = build_contextual_prompt(
-            text, emotion, posture, weather,
-            action_taken=action_taken,
-            action_msg=action_msg
-        )
-        llm_response = self.groq.get_response(SYSTEM_PROMPT, context_prompt)
+        try:
+            context_prompt = build_contextual_prompt(
+                user_text=text,
+                emotion=emotion or "neutral",
+                posture=posture or "unknown",
+                weather=weather or {},
+                action_taken=action if action else None
+            )
+            llm_response = self.groq.get_response(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=context_prompt
+            )
+        except Exception as e:
+            logger.error(f"LLM response error: {e}")
+            llm_response = "I heard you. Let me help with that."
         
         return {
             "response": llm_response,
