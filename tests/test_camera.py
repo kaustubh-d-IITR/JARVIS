@@ -14,15 +14,15 @@ import sys
 def try_open_camera():
     """Try multiple backends and indices to find a working webcam."""
     # Try default first (most compatible)
-    backends = [
-        ("default", None),
-    ]
-    # On Windows, add DSHOW and MSMF
+    backends = []
     if sys.platform == "win32":
         backends.extend([
             ("DSHOW", cv2.CAP_DSHOW),
+            ("default", None),
             ("MSMF", cv2.CAP_MSMF),
         ])
+    else:
+        backends.append(("default", None))
 
     for idx in [0, 1, 2]:
         for name, backend in backends:

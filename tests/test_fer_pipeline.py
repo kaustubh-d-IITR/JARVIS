@@ -77,17 +77,30 @@ def main():
 
     # Open webcam — try multiple methods
     cap = None
+    backends = []
+    if sys.platform == "win32":
+        backends = [(cv2.CAP_DSHOW, "DSHOW"), (None, "default")]
+    else:
+        backends = [(None, "default")]
+
     for idx in [0, 1]:
-        cap = cv2.VideoCapture(idx)
-        if cap.isOpened():
-            ret, test_frame = cap.read()
-            if ret and test_frame is not None:
-                print(f"[PASS] Webcam opened at index {idx}")
-                break
-            cap.release()
-            cap = None
-        else:
-            cap = None
+        for backend_val, backend_name in backends:
+            if backend_val is not None:
+                cap = cv2.VideoCapture(idx, backend_val)
+            else:
+                cap = cv2.VideoCapture(idx)
+                
+            if cap.isOpened():
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None:
+                    print(f"[PASS] Webcam opened at index {idx} with backend {backend_name}")
+                    break
+                cap.release()
+                cap = None
+            else:
+                cap = None
+        if cap is not None:
+            break
 
     if cap is None:
         print("[FAIL] Cannot open webcam. Close other camera apps first!")

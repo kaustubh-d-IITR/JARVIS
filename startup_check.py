@@ -121,17 +121,31 @@ def main():
     try:
         import cv2
         cam_found = False
+        backends = []
+        if sys.platform == "win32":
+            backends = [(cv2.CAP_DSHOW, "DSHOW"), (None, "default")]
+        else:
+            backends = [(None, "default")]
+
         for idx in [0, 1, 2]:
-            cap = cv2.VideoCapture(idx)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    h, w = frame.shape[:2]
-                    ok(f"Webcam accessible at index {idx} -- resolution {w}x{h}")
-                    cam_found = True
+            for backend_val, backend_name in backends:
+                if backend_val is not None:
+                    cap = cv2.VideoCapture(idx, backend_val)
+                else:
+                    cap = cv2.VideoCapture(idx)
+                    
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        h, w = frame.shape[:2]
+                        ok(f"Webcam accessible at index {idx} ({backend_name}) -- resolution {w}x{h}")
+                        cam_found = True
+                        cap.release()
+                        break
                     cap.release()
-                    break
-                cap.release()
+            if cam_found:
+                break
+                
         if not cam_found:
             warn("No webcam detected on indices 0-2 (may be in use by another app)")
             warnings += 1

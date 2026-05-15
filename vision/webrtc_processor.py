@@ -68,23 +68,33 @@ class JarvisVideoProcessor:
         """Try multiple camera indices and backends to find a working webcam."""
         logger.info("Attempting to open webcam...")
 
-        # Try default backend first (most compatible), then fallbacks
+        backends = []
+        if sys.platform == "win32":
+            backends = [(cv2.CAP_DSHOW, "DSHOW"), (None, "default")]
+        else:
+            backends = [(None, "default")]
+
         for idx in [0, 1, 2]:
-            try:
-                cap = cv2.VideoCapture(idx)
-                if cap.isOpened():
-                    ret, test_frame = cap.read()
-                    if ret and test_frame is not None:
-                        h, w = test_frame.shape[:2]
-                        logger.info(f"Webcam opened: index={idx}, resolution={w}x{h}")
-                        return cap
+            for backend_val, backend_name in backends:
+                try:
+                    if backend_val is not None:
+                        cap = cv2.VideoCapture(idx, backend_val)
                     else:
-                        logger.info(f"Index {idx}: opened but cannot read frames")
-                        cap.release()
-                else:
-                    logger.info(f"Index {idx}: cannot open")
-            except Exception as e:
-                logger.error(f"Index {idx}: exception {e}")
+                        cap = cv2.VideoCapture(idx)
+                        
+                    if cap.isOpened():
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None:
+                            h, w = test_frame.shape[:2]
+                            logger.info(f"Webcam opened: index={idx}, backend={backend_name}, resolution={w}x{h}")
+                            return cap
+                        else:
+                            logger.info(f"Index {idx} ({backend_name}): opened but cannot read frames")
+                            cap.release()
+                    else:
+                        logger.info(f"Index {idx} ({backend_name}): cannot open")
+                except Exception as e:
+                    logger.error(f"Index {idx} ({backend_name}): exception {e}")
 
         logger.error("No working webcam found on any index.")
         return None
