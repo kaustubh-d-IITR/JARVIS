@@ -61,23 +61,50 @@ class SpotifyController:
     def play_music(self, query: str = None) -> tuple:
         sp = self._get_client()
         if sp is None:
-            return False, "Spotify not authenticated. Please connect Spotify first."
+            return False, "Spotify not authenticated."
         try:
-            results = sp.search(q=query or "chill focus", type="playlist", limit=1)
-            playlists = results.get("playlists", {}).get("items", [])
-            if not playlists:
-                return False, f"No playlist found for: {query}"
-            playlist_uri = playlists[0]["uri"]
             devices = sp.devices()
             device_list = devices.get("devices", [])
             if not device_list:
                 return False, "No active Spotify device found. Open Spotify on your phone or PC first."
+
             device_id = next(
                 (d["id"] for d in device_list if d["is_active"]),
                 device_list[0]["id"]
             )
-            sp.start_playback(device_id=device_id, context_uri=playlist_uri)
-            return True, f"Playing: {playlists[0]['name']}"
+
+            search_query = query or "chill focus"
+
+            # Try searching for a specific TRACK first
+            track_results = sp.search(q=search_query, type="track", limit=5)
+            tracks = track_results.get("tracks", {}).get("items", [])
+
+            if tracks:
+                # Pick the best match (first result)
+                track = tracks[0]
+                track_uri = track["uri"]
+                track_name = track["name"]
+                artist_name = track["artists"][0]["name"]
+                sp.start_playback(
+                    device_id=device_id,
+                    uris=[track_uri]
+                )
+                return True, f"Playing '{track_name}' by {artist_name}"
+
+            # Fall back to playlist search if no track found
+            playlist_results = sp.search(q=search_query, type="playlist", limit=1)
+            playlists = playlist_results.get("playlists", {}).get("items", [])
+
+            if playlists:
+                playlist = playlists[0]
+                sp.start_playback(
+                    device_id=device_id,
+                    context_uri=playlist["uri"]
+                )
+                return True, f"Playing playlist: {playlist['name']}"
+
+            return False, f"Could not find anything on Spotify for: {search_query}"
+
         except Exception as e:
             logger.error(f"Spotify play error: {e}")
             return False, f"Spotify error: {str(e)}"
@@ -89,6 +116,8 @@ class SpotifyController:
         try:
             sp.pause_playback()
             return True, "Music paused."
-        except Exception as e:
-            logger.error(f"Spotify pause error: {e}")
+        except spotipy.exceptions.SpotifyException as e:
+            if "No active device" in str(e) or "403" in str(e):
+                return False, "Nothing is currently playing."
             return False, f"Pause error: {str(e)}"
+
