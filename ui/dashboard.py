@@ -213,38 +213,53 @@ def render_dashboard():
             neutral_color="#27ae60",
             icon_name="microphone",
             icon_size="2x",
-            pause_threshold=5.0,
+            pause_threshold=3.0,
             sample_rate=16000,
-            energy_threshold=0.01
+            energy_threshold=0.05
         )
         st.caption("🎙️ Click mic → speak your command → click again to stop. "
                    "For best results, lower speaker volume while recording.")
         
-        if audio_bytes:
+        # Reject recordings that are too short to be a real command
+        # Real speech is at least 0.5 seconds = ~8000 bytes at 16kHz
+        if audio_bytes is not None and len(audio_bytes) < 8000:
+            audio_bytes = None  # Ignore — too short, likely noise
+
+        # Prevent processing if already processing a command
+        if st.session_state.get("processing_voice", False):
+            st.info("Processing previous command...")
+        elif audio_bytes:
             audio_hash = hashlib.md5(audio_bytes).hexdigest()
             if st.session_state.get('last_audio_hash') != audio_hash:
                 st.session_state.last_audio_hash = audio_hash
-                
-                log_system("Voice received from browser. Processing...")
-                with open("temp_audio.wav", "wb") as f:
-                    f.write(audio_bytes)
+                st.session_state.processing_voice = True
+                try:
+                    log_system("Voice received from browser. Processing...")
+                    with open("temp_audio.wav", "wb") as f:
+                        f.write(audio_bytes)
                     
-                with st.spinner("Transcribing via Deepgram..."):
-                    transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async("temp_audio.wav"))
+                    with st.spinner("Transcribing via Deepgram..."):
+                        transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async("temp_audio.wav"))
                     
-                st.session_state.chat_history.append({"role": "user", "text": transcript})
-                
-                with st.spinner("JARVIS is thinking..."):
-                    result = st.session_state.decision_engine.process_voice_command(
-                        text=transcript,
-                        emotion=st.session_state.current_emotion,
-                        posture=st.session_state.current_posture,
-                        weather=st.session_state.weather
-                    )
-                    
-                    st.session_state.chat_history.append({"role": "jarvis", "text": result["response"]})
-                    if result.get("action_msg"):
-                        log_system(f"Action: {result['action_msg']}")
+                    # Only process non-empty transcripts
+                    if transcript and transcript.strip() and not transcript.startswith("Error"):
+                        st.session_state.chat_history.append({"role": "user", "text": transcript})
+                        
+                        with st.spinner("JARVIS is thinking..."):
+                            result = st.session_state.decision_engine.process_voice_command(
+                                text=transcript,
+                                emotion=st.session_state.current_emotion,
+                                posture=st.session_state.current_posture,
+                                weather=st.session_state.weather
+                            )
+                            
+                            st.session_state.chat_history.append({"role": "jarvis", "text": result["response"]})
+                            if result.get("action_msg"):
+                                log_system(f"Action: {result['action_msg']}")
+                    else:
+                        log_system("Voice recording was empty or unclear. Try again.")
+                finally:
+                    st.session_state.processing_voice = False
                 st.rerun()
 
     with col_chat:

@@ -63,24 +63,35 @@ class SpotifyController:
         if sp is None:
             return False, "Spotify not authenticated."
         try:
+            # Get devices
             devices = sp.devices()
             device_list = devices.get("devices", [])
             if not device_list:
-                return False, "No active Spotify device found. Open Spotify on your phone or PC first."
+                return False, "No active Spotify device. Open Spotify on your phone or PC first."
 
             device_id = next(
                 (d["id"] for d in device_list if d["is_active"]),
                 device_list[0]["id"]
             )
 
+            # ALWAYS pause current playback before switching
+            # This prevents 403 errors when switching mid-song
+            try:
+                current = sp.current_playback()
+                if current and current.get("is_playing"):
+                    sp.pause_playback(device_id=device_id)
+                    import time
+                    time.sleep(0.3)  # Brief pause to let Spotify settle
+            except Exception:
+                pass  # If nothing playing, continue
+
             search_query = query or "chill focus"
 
-            # Try searching for a specific TRACK first
+            # Search for track first
             track_results = sp.search(q=search_query, type="track", limit=5)
             tracks = track_results.get("tracks", {}).get("items", [])
 
             if tracks:
-                # Pick the best match (first result)
                 track = tracks[0]
                 track_uri = track["uri"]
                 track_name = track["name"]
@@ -91,10 +102,9 @@ class SpotifyController:
                 )
                 return True, f"Playing '{track_name}' by {artist_name}"
 
-            # Fall back to playlist search if no track found
+            # Fallback to playlist
             playlist_results = sp.search(q=search_query, type="playlist", limit=1)
             playlists = playlist_results.get("playlists", {}).get("items", [])
-
             if playlists:
                 playlist = playlists[0]
                 sp.start_playback(
@@ -103,21 +113,30 @@ class SpotifyController:
                 )
                 return True, f"Playing playlist: {playlist['name']}"
 
-            return False, f"Could not find anything on Spotify for: {search_query}"
+            return False, f"Nothing found for: {search_query}"
 
         except Exception as e:
+            error_str = str(e)
+            if "Premium" in error_str:
+                return False, "Spotify Premium required for playback control."
+            if "No active device" in error_str:
+                return False, "No active Spotify device. Open Spotify app first."
             logger.error(f"Spotify play error: {e}")
-            return False, f"Spotify error: {str(e)}"
+            return False, f"Spotify error: {error_str}"
 
     def pause_music(self) -> tuple:
         sp = self._get_client()
         if sp is None:
             return False, "Spotify not authenticated."
         try:
-            sp.pause_playback()
-            return True, "Music paused."
-        except spotipy.exceptions.SpotifyException as e:
-            if "No active device" in str(e) or "403" in str(e):
-                return False, "Nothing is currently playing."
+            # Check if actually playing before pausing
+            current = sp.current_playback()
+            if current and current.get("is_playing"):
+                sp.pause_playback()
+                return True, "Music paused."
+            else:
+                return True, "Music is already paused."
+        except Exception as e:
             return False, f"Pause error: {str(e)}"
+
 
