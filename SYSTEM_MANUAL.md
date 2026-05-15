@@ -1,646 +1,587 @@
-# JARVIS — Complete System Architecture & Backend Logic Manual
+# JARVIS — Complete System Manual
 
-> **Version**: 1.0  
-> **Last Updated**: May 15, 2026  
-> **Author**: Auto-generated system documentation
-
----
-
-## Table of Contents
-
-1. [System Overview](#1-system-overview)
-2. [Project File Map](#2-project-file-map)
-3. [Boot Sequence — What Happens When You Run JARVIS](#3-boot-sequence)
-4. [Layer-by-Layer Architecture](#4-layer-by-layer-architecture)
-5. [Detailed File Responsibilities](#5-detailed-file-responsibilities)
-6. [Data Flow Diagrams](#6-data-flow-diagrams)
-7. [Interaction Sequences](#7-interaction-sequences)
-8. [Decision Engine Logic](#8-decision-engine-logic)
-9. [Autonomous Mode Deep Dive](#9-autonomous-mode-deep-dive)
-10. [External API Integration Map](#10-external-api-integration-map)
-11. [Session State Architecture](#11-session-state-architecture)
-12. [Error Handling Strategy](#12-error-handling-strategy)
+> **Last Updated:** 15 May 2026  
+> **Version:** Production (Streamlit Cloud)  
+> **Author:** Kaustubh (IITR) + AI Pair Programming
 
 ---
 
-## 1. System Overview
+## 1. What JARVIS Is
 
-JARVIS is an **emotion-aware AI assistant** built on Streamlit. It combines:
+JARVIS is a real-time, emotion-aware AI assistant that:
+- **Sees** the user's face (emotion) and body (posture) through their browser webcam via WebRTC.
+- **Hears** voice commands through the browser microphone, transcribed by Deepgram.
+- **Thinks** using Groq LLM (Llama 3.3 70B) with injected emotion/weather context.
+- **Acts** by controlling Spotify playback — playing specific songs or mood-based playlists.
+- **Feels** the environment via OpenWeather API for contextual reasoning.
 
-- **Computer Vision** (webcam emotion + posture detection)
-- **Voice Recognition** (Deepgram speech-to-text)
-- **LLM Intelligence** (Groq/Llama for conversational AI)
-- **Music Automation** (Spotify playback based on mood)
-- **Weather Context** (OpenWeather API)
-- **Autonomous Behavior** (background thread that suggests actions)
+---
 
-The system follows a **Perception → Decision → Action** pipeline:
+## 2. Architecture Diagram
 
 ```
-┌─────────────┐     ┌─────────────────┐     ┌──────────────┐
-│ PERCEPTION  │────▶│    DECISION     │────▶│    ACTION     │
-│             │     │                 │     │              │
-│ • Webcam    │     │ • DecisionEngine│     │ • Spotify    │
-│ • Voice     │     │ • GroqLLM       │     │ • Chat Reply │
-│ • Weather   │     │ • Autonomous    │     │ • UI Update  │
-└─────────────┘     └─────────────────┘     └──────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           USER'S BROWSER                                │
+│                                                                         │
+│   ┌──────────────┐       ┌──────────────────┐       ┌──────────────┐   │
+│   │  Webcam Feed │       │  Streamlit UI     │       │  Microphone  │   │
+│   │  (WebRTC)    │       │  (dashboard.py)   │       │  (Recorder)  │   │
+│   └──────┬───────┘       └────────┬─────────┘       └──────┬───────┘   │
+└──────────┼────────────────────────┼─────────────────────────┼──────────┘
+           │ video frames           │ renders UI               │ audio WAV
+           ▼                        │                          ▼
+┌──────────────────┐                │                ┌──────────────────┐
+│  WebRTC Processor│                │                │  Deepgram API    │
+│  (webrtc_proc.py)│                │                │  (transcriber.py)│
+│                  │                │                │                  │
+│  EmotionDetector │                │                │  nova-2 model    │
+│  PostureDetector │                │                │  keyword boost   │
+└────────┬─────────┘                │                │  confidence chk  │
+         │ emotion, posture         │                └────────┬─────────┘
+         ▼                          │                         │ transcript
+┌──────────────────┐                │                         ▼
+│  @st.fragment     │                │                ┌──────────────────┐
+│  render_metrics() │◄───polls 1s───┤                │  DecisionEngine  │
+│  updates session  │                │                │  (decision_eng.) │
+└──────────────────┘                │                │                  │
+                                    │                │  Intent Matching │
+                                    │                │  Query Extraction│
+                                    │                └───┬──────────┬───┘
+                                    │                    │          │
+                                    │           ┌───────▼──┐   ┌──▼──────────┐
+                                    │           │ Spotify   │   │ Groq LLM    │
+                                    │           │ Controller│   │ (groq_cl.py)│
+                                    │           │           │   │             │
+                                    │           │ track-first│  │ Llama 3.3   │
+                                    │           │ search     │  │ 70B         │
+                                    │           └───────────┘   └─────────────┘
+                                    │
+                          ┌─────────▼──────────┐
+                          │  Autonomous         │
+                          │  Controller         │
+                          │  (background thread)│
+                          │  polls emotion every│
+                          │  5s, suggests music  │
+                          └─────────────────────┘
 ```
 
 ---
 
-## 2. Project File Map
+## 3. Complete File Map
 
 ```
 JARVIS/
 │
-├── app.py                          ← Entry point. Bootstraps asyncio + calls dashboard.
-├── requirements.txt                ← All Python dependencies.
-├── README.md                       ← Setup instructions.
-├── .env.example                    ← Template for API keys.
-├── .gitignore                      ← Git exclusions (.env, __pycache__, etc.)
-├── run_local.bat / run_local.sh    ← OS-specific startup scripts.
-├── packages.txt                    ← System-level Linux libs (for cloud deploy).
+├── app.py                              ← Entry point. Sets asyncio policy, calls render_dashboard().
+├── requirements.txt                    ← All Python dependencies.
+├── packages.txt                        ← System-level Linux libs (libgl1 for OpenCV on cloud).
+├── .env                                ← API keys (never committed).
+├── .gitignore
+├── SYSTEM_MANUAL.md                    ← This file.
 │
 ├── config/
 │   ├── __init__.py
-│   └── settings.py                 ← Loads .env, exposes all config as properties.
-│
-├── vision/
-│   ├── __init__.py
-│   ├── emotion_detector.py         ← DeepFace emotion analysis with frame skipping.
-│   ├── posture_detector.py         ← MediaPipe Pose landmark analysis.
-│   ├── webrtc_processor.py         ← WebRTC video frame handler (glues vision together).
-│   └── pose_landmarker_lite.task   ← Downloaded MediaPipe model binary.
-│
-├── voice/
-│   ├── __init__.py
-│   └── transcriber.py              ← Sends audio to Deepgram REST API, returns text.
-│
-├── llm/
-│   ├── __init__.py
-│   ├── groq_client.py              ← Groq API wrapper (sends prompt, gets response).
-│   └── prompts.py                  ← JARVIS system prompt + context injection builder.
-│
-├── spotify/
-│   ├── __init__.py
-│   └── spotify_controller.py       ← Spotipy OAuth, play/pause/search.
-│
-├── weather/
-│   ├── __init__.py
-│   └── weather_service.py          ← OpenWeather API fetch + session cache.
-│
-├── logic/
-│   ├── __init__.py
-│   ├── decision_engine.py          ← Central brain: intent matching + LLM call + actions.
-│   └── autonomous_controller.py    ← Background thread that polls state & suggests actions.
+│   └── settings.py                     ← Loads .env, exposes all API keys + constants as properties.
 │
 ├── ui/
 │   ├── __init__.py
-│   └── dashboard.py                ← Full Streamlit UI: layout, widgets, event wiring.
+│   └── dashboard.py                    ← THE MAIN FILE. All UI rendering, state management,
+│                                          WebRTC setup, voice recording, Spotify OAuth, chat display.
+│
+├── vision/
+│   ├── __init__.py
+│   ├── webrtc_processor.py             ← VideoProcessorBase subclass. Receives browser video frames
+│   │                                      via WebRTC, runs emotion + posture detection on every 10th frame.
+│   ├── emotion_detector.py             ← DeepFace wrapper. Detects dominant emotion + confidence.
+│   └── posture_detector.py             ← MediaPipe Pose wrapper. Detects upright vs slouched.
+│
+├── voice/
+│   ├── __init__.py
+│   └── transcriber.py                  ← Sends audio to Deepgram API. Keyword boosting, confidence
+│                                          filtering, music-bleed rejection.
+│
+├── logic/
+│   ├── __init__.py
+│   ├── decision_engine.py              ← THE BRAIN. Priority-ordered intent matching, regex-based
+│   │                                      query extraction, Spotify action dispatch, LLM prompt building.
+│   └── autonomous_controller.py        ← Background thread. Polls emotion state, pushes music
+│                                          suggestions when user is sad/angry (60s cooldown).
+│
+├── llm/
+│   ├── __init__.py
+│   ├── groq_client.py                  ← Sends (system_prompt + user_prompt) to Groq API.
+│   └── prompts.py                      ← SYSTEM_PROMPT (rules) + build_contextual_prompt() function.
+│
+├── spotify/
+│   ├── __init__.py
+│   └── spotify_controller.py           ← Web-compatible OAuth flow (MemoryCacheHandler), track-first
+│                                          search, pause-before-switch, device detection.
+│
+├── weather/
+│   ├── __init__.py
+│   └── weather_service.py              ← OpenWeather API. Cached per session. Returns temp/condition.
 │
 └── utils/
     ├── __init__.py
-    ├── logger.py                   ← Dual logger: stdout + Streamlit session_state.
-    └── helpers.py                  ← Emotion-to-playlist mapping utility.
+    ├── helpers.py                      ← get_spotify_playlist_for_emotion() — maps emotion → search query.
+    └── logger.py                       ← Dual logger: writes to stdout + pushes to st.session_state.system_logs.
 ```
 
 ---
 
-## 3. Boot Sequence
+## 4. Boot Sequence — What Happens When The App Loads
 
-Here is the **exact order of execution** when you run `streamlit run app.py`:
+This is the exact order of execution when a user opens the Streamlit app:
 
-### Step 1 — `app.py` (Entry Point)
-
+### Step 1: `app.py` runs
 ```
 app.py
-  ├── Sets Windows asyncio policy (WindowsSelectorEventLoopPolicy)
-  └── Calls render_dashboard() from ui/dashboard.py
+  └─► Sets asyncio event loop policy (Windows fix)
+  └─► Calls render_dashboard()
 ```
 
-- On Windows, Python's default asyncio event loop doesn't support some operations needed by the audio transcriber. The `WindowsSelectorEventLoopPolicy` fix is applied before anything else.
-
-### Step 2 — `ui/dashboard.py → render_dashboard()`
-
+### Step 2: `render_dashboard()` in `ui/dashboard.py`
 ```
 render_dashboard()
-  ├── st.set_page_config()           ← Sets page title, layout to "wide"
-  ├── preload_models()               ← @st.cache_resource — downloads DeepFace weights ONCE
-  ├── initialize_session_state()     ← Creates all service objects ONCE per session
-  │   ├── AudioTranscriber()         ← voice/transcriber.py
-  │   ├── GroqClient()               ← llm/groq_client.py
-  │   ├── SpotifyController()        ← spotify/spotify_controller.py
-  │   ├── WeatherService()           ← weather/weather_service.py
-  │   ├── DecisionEngine(groq, spotify)  ← logic/decision_engine.py
-  │   ├── AutonomousController(engine)   ← logic/autonomous_controller.py
-  │   └── Sets default state values (emotion="neutral", posture="unknown", etc.)
   │
-  └── Renders the UI (sidebar + main body)
+  ├─ 1. st.set_page_config()           ← Sets page title, wide layout
+  │
+  ├─ 2. preload_models()               ← @st.cache_resource — runs ONCE ever
+  │     └─ Creates EmotionDetector()
+  │     └─ Runs dummy detection on blank 224×224 image
+  │     └─ Forces DeepFace to download model weights (~30s first time)
+  │     └─ Result is cached — never runs again unless app restarts
+  │
+  ├─ 3. initialize_session_state()      ← Runs ONCE per session (guarded by 'initialized' flag)
+  │     └─ Creates AudioTranscriber()
+  │     └─ Creates GroqClient()
+  │     └─ Creates SpotifyController()
+  │     └─ Creates WeatherService() → immediately calls get_weather() → caches result
+  │     └─ Creates DecisionEngine(groq, spotify)
+  │     └─ Creates AutonomousController(decision_engine)
+  │     └─ Initializes tracking: current_emotion, emotion_confidence, current_posture
+  │     └─ Initializes UI state: chat_history=[], system_logs=[], autonomous_mode=False
+  │     └─ Sets initialized=True
+  │
+  ├─ 4. Spotify OAuth Callback Check
+  │     └─ Reads st.query_params for "code"
+  │     └─ If found → calls spotify.handle_callback(code) → stores token → clears params → reruns
+  │
+  ├─ 5. Renders Sidebar
+  │     └─ Autonomous Mode toggle
+  │     └─ Spotify auth status / Connect link
+  │     └─ System logs (scrollable)
+  │
+  ├─ 6. Renders Main Body
+  │     └─ Title, API key warnings, weather widget
+  │     └─ Autonomous suggestion alerts (Accept/Dismiss)
+  │     └─ Two-column layout: [Vision + Voice] | [Chat History]
+  │
+  ├─ 7. WebRTC Camera (left column)
+  │     └─ webrtc_streamer() with STUN + TURN servers
+  │     └─ @st.fragment(run_every=1.0) polls ctx.video_processor for emotion/posture
+  │
+  ├─ 8. Voice Recorder (left column, below camera)
+  │     └─ audio_recorder() widget with tuned thresholds
+  │     └─ Live transcript display
+  │     └─ Processing pipeline (see Section 6)
+  │
+  └─ 9. Chat History (right column)
+        └─ Renders all user (🎙️) and JARVIS messages
 ```
-
-### Step 3 — Model Preloading
-
-```
-preload_models()  [@st.cache_resource — runs ONCE per server lifetime]
-  ├── Creates EmotionDetector()
-  ├── Runs detect_emotion() on a dummy 224x224 black image
-  │   └── This forces DeepFace to download its CNN weights (~30s first time)
-  └── Returns True (cached forever after)
-```
-
-**Why?** DeepFace downloads model weights on first use. If this happened inside the WebRTC thread, the connection would timeout. Pre-downloading on the main thread prevents that.
-
-### Step 4 — Service Initialization
-
-All service objects are created **once** and stored in `st.session_state`:
-
-| Service | Class | File | What It Does on `__init__` |
-|---|---|---|---|
-| `transcriber` | `AudioTranscriber` | `voice/transcriber.py` | Nothing (lazy) |
-| `groq` | `GroqClient` | `llm/groq_client.py` | Nothing (lazy) |
-| `spotify` | `SpotifyController` | `spotify/spotify_controller.py` | Sets OAuth scope string |
-| `weather_svc` | `WeatherService` | `weather/weather_service.py` | Sets base URL |
-| `decision_engine` | `DecisionEngine` | `logic/decision_engine.py` | Stores refs to groq + spotify |
-| `autonomous` | `AutonomousController` | `logic/autonomous_controller.py` | Stores ref to decision_engine |
-
-Weather is also fetched immediately: `st.session_state.weather = weather_svc.get_weather()`
 
 ---
 
-## 4. Layer-by-Layer Architecture
-
-The system is organized into **5 layers**:
-
-```
-┌──────────────────────────────────────────────────────┐
-│                    UI LAYER                          │
-│              ui/dashboard.py                         │
-│   (Streamlit widgets, layout, event handlers)        │
-├──────────────────────────────────────────────────────┤
-│                  LOGIC LAYER                         │
-│    logic/decision_engine.py                          │
-│    logic/autonomous_controller.py                    │
-│   (Intent matching, LLM orchestration, suggestions)  │
-├──────────────────────────────────────────────────────┤
-│                SERVICE LAYER                         │
-│  llm/groq_client.py    spotify/spotify_controller.py │
-│  voice/transcriber.py  weather/weather_service.py    │
-│   (External API wrappers — each talks to one API)    │
-├──────────────────────────────────────────────────────┤
-│               PERCEPTION LAYER                       │
-│  vision/emotion_detector.py                          │
-│  vision/posture_detector.py                          │
-│  vision/webrtc_processor.py                          │
-│   (Computer vision — runs in WebRTC thread)          │
-├──────────────────────────────────────────────────────┤
-│               INFRASTRUCTURE LAYER                   │
-│  config/settings.py   utils/logger.py                │
-│  utils/helpers.py     llm/prompts.py                 │
-│   (Config, logging, utilities, prompt templates)     │
-└──────────────────────────────────────────────────────┘
-```
-
-**Key Rule**: Upper layers depend on lower layers, never the reverse. The Perception Layer and Service Layer never call each other directly — the Logic Layer orchestrates them.
-
----
-
-## 5. Detailed File Responsibilities
+## 5. File-by-File Responsibilities
 
 ### `config/settings.py`
-- Loads `.env` using `python-dotenv` with `override=True`
-- Exposes all config as **properties** on a `Settings` singleton
-- Every property call re-reads env vars (via `reload_env()`) ensuring hot-reload
-- Hardcoded defaults: `GROQ_MODEL = "llama-3.3-70b-versatile"`, `AUTONOMOUS_COOLDOWN = 60s`, `EMOTION_CONFIDENCE_THRESHOLD = 0.70`
-- Includes `DEBUG_INFO` dict for troubleshooting env loading issues
+- Loads `.env` using `python-dotenv`
+- Exposes every API key as a `@property` that re-reads env each time
+- Hardcoded constants: `GROQ_MODEL = "llama-3.3-70b-versatile"`, `AUTONOMOUS_COOLDOWN = 60s`, `EMOTION_THRESHOLD = 0.70`
+- `DEBUG_INFO` dict tracks if .env was found (used by UI to show debug panel)
+
+### `ui/dashboard.py` — The Orchestrator
+This is the central hub. It:
+1. Initializes all services into `st.session_state`
+2. Handles Spotify OAuth callback (`?code=` in URL)
+3. Renders the entire UI (sidebar + main body)
+4. Manages the WebRTC camera lifecycle
+5. Captures voice recordings, sends to transcriber, feeds to decision engine
+6. Displays chat history and live transcript
+7. Handles autonomous suggestion Accept/Dismiss buttons
+
+**Session State Keys:**
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `initialized` | bool | Guard — prevents re-initialization |
+| `transcriber` | AudioTranscriber | Deepgram client |
+| `groq` | GroqClient | LLM client |
+| `spotify` | SpotifyController | Spotify API client |
+| `weather_svc` | WeatherService | Weather API client |
+| `decision_engine` | DecisionEngine | The brain |
+| `autonomous` | AutonomousController | Background thread |
+| `current_emotion` | str | Latest detected emotion |
+| `emotion_confidence` | float | Latest emotion confidence (0-1) |
+| `current_posture` | str | "upright", "slouched", or "unknown" |
+| `weather` | dict | Cached weather data |
+| `chat_history` | list[dict] | `[{"role":"user","text":"..."}, {"role":"jarvis","text":"..."}]` |
+| `system_logs` | list[str] | Last 20 log messages |
+| `autonomous_mode` | bool | Is background brain active? |
+| `last_audio_hash` | str | MD5 of last audio — prevents duplicate processing |
+| `spotify_token_info` | dict | OAuth token (set by SpotifyController) |
+| `processing_voice` | bool | Lock — prevents concurrent transcriptions |
+| `last_transcript` | str | Latest Deepgram transcript (displayed in UI) |
+| `pending_suggestion` | dict | Autonomous suggestion awaiting user response |
+
+### `vision/webrtc_processor.py` — Browser Camera Handler
+- Extends `VideoProcessorBase` from `streamlit-webrtc`
+- `recv(frame)` is called automatically by WebRTC for every video frame from the browser
+- Converts `av.VideoFrame` → numpy BGR array
+- Every 10th frame: runs `EmotionDetector.detect_emotion()` + `PostureDetector.detect_posture()`
+- Stores results in `self.latest_emotion`, `self.latest_emotion_conf`, `self.latest_posture`
+- Returns annotated frame (with pose skeleton drawn) back to the browser
+- These attributes are polled by `render_metrics()` in dashboard.py every 1 second
 
 ### `vision/emotion_detector.py`
-- Uses **DeepFace** with `opencv` detector backend
-- **Frame skipping**: Only processes every 5th frame (`skip_frames=5`)
-- Returns `(emotion_string, confidence_float)` — e.g., `("sad", 0.85)`
-- On failure, returns last known state (graceful degradation)
-- `enforce_detection=False` means it won't crash if no face is found
+- Wraps `DeepFace.analyze()` with `detector_backend='opencv'` and `enforce_detection=False`
+- Has its own frame-skipping (every 5th call) for CPU optimization
+- Returns `(dominant_emotion: str, confidence: float)` — e.g. `("happy", 0.87)`
+- Falls back to last known state on detection failure
 
 ### `vision/posture_detector.py`
-- Uses **MediaPipe Pose Landmarker** (Tasks API, not legacy Solutions API)
-- Auto-downloads `pose_landmarker_lite.task` model on first run
-- Detects 33 body landmarks, draws skeleton overlay on frame
-- **Posture heuristic**: If nose Y-coordinate is more than 0.2 above shoulder midpoint → "upright", else → "slouched"
-- Returns `(posture_string, annotated_frame)`
+- Uses MediaPipe Pose Landmarker (Tasks API, Python 3.13 compatible)
+- Auto-downloads the `.task` model file on first run
+- Simple heuristic: if `nose.y < shoulder_y - 0.2` → "upright", else "slouched"
+- Draws pose skeleton on the frame and returns `(posture_status, annotated_frame)`
 
-### `vision/webrtc_processor.py`
-- Implements `VideoProcessorBase` from `streamlit-webrtc`
-- **Runs in a separate thread** (not on Streamlit's main thread)
-- Creates its own `EmotionDetector` and `PostureDetector` instances
-- Processes only **1 out of every 10 frames** (`process_every_n_frames=10`) to save CPU
-- Stores results as instance attributes (`latest_emotion`, `latest_emotion_conf`, `latest_posture`)
-- The UI reads these attributes via `ctx.video_processor.latest_emotion`
+### `voice/transcriber.py` — Speech-to-Text
+- Sends audio WAV to `https://api.deepgram.com/v1/listen` via HTTP POST
+- Uses `nova-2` model with these key features:
+  - **Keyword boosting**: `play:5, pause:5, stop:5, JARVIS:5` — tells Deepgram to prioritize these words
+  - **Confidence filter**: If average word confidence < 55%, rejects transcript (likely background music)
+  - **Music-bleed filter**: If transcript > 15 words with zero command words, rejects it (likely song lyrics)
+- Returns empty string `""` for rejected transcripts — dashboard ignores empty strings
+- Runs in a thread via `asyncio.to_thread()` to avoid blocking Streamlit
+- Cleans up temp audio file after processing
 
-### `voice/transcriber.py`
-- Sends audio file to **Deepgram REST API** (`/v1/listen?model=nova-2`)
-- Uses `asyncio.to_thread()` to avoid blocking the event loop
-- Cleans up temp audio file after transcription
-- Returns transcript string or error message
+### `logic/decision_engine.py` — The Brain
+**This is the most critical file.** It decides what JARVIS does.
+
+**Intent Matching (Priority Order):**
+
+| Priority | Intent | Keywords | Action |
+|----------|--------|----------|--------|
+| 1 (highest) | PAUSE/STOP | "pause", "stop", "halt", "quiet", "silence", "mute", "stop music", etc. | `spotify.pause_music()` |
+| 2 | PLAY (specific) | "play" + regex extracts song/artist | `spotify.play_music(query=extracted_query)` |
+| 2 | PLAY (generic) | "play", "music", "song" but nothing specific | `spotify.play_music(query=emotion_playlist)` |
+
+**Query Extraction (`_extract_search_query`):**
+Uses 4 regex patterns in priority order:
+
+```
+Pattern 1: "play Blue Eyes by Arijit Singh"  →  "Blue Eyes Arijit Singh"
+Pattern 2: "play music by Arijit Singh"      →  "Arijit Singh"
+Pattern 3: "play Arijit Singh song"          →  "Arijit Singh"
+Pattern 4: "play Tum Hi Ho"                  →  "Tum Hi Ho"
+Generic:   "play music"                      →  None (emotion fallback)
+```
+
+**After action (or no action), builds LLM prompt:**
+```
+[CONTEXT: emotion=sad, posture=slouched, weather=cloudy 24°C]
+[SYSTEM ACTION RESULT: Playing 'Tum Hi Ho' by Arijit Singh]
+User said: play Tum Hi Ho
+```
+
+**LLM Response Rules (from SYSTEM_PROMPT):**
+- Max 2 sentences. Never asks questions. References real song names from `[SYSTEM ACTION RESULT]`.
+
+### `logic/autonomous_controller.py` — Background Brain
+- Runs in a daemon thread (won't block app shutdown)
+- Polls emotion state every 5 seconds
+- If emotion is "sad" or "angry" with confidence > 70%:
+  - Generates a suggestion: `"I detected you might be feeling sad. Would you like me to play a sad emotional hindi songs playlist?"`
+  - Stores in `self.latest_suggestion` (thread-safe via Lock)
+- 60-second cooldown between suggestions
+- Dashboard polls `get_and_clear_suggestion()` on every render
+- User sees Accept/Dismiss buttons
 
 ### `llm/groq_client.py`
-- Wraps the **Groq SDK** (`groq` Python package)
-- Creates a fresh `Groq()` client on each call (API key checked at call time)
-- Uses model `llama-3.3-70b-versatile`, `temperature=0.7`, `max_tokens=150`
-- Takes `system_prompt` + `user_prompt`, returns response string
+- Creates a `Groq` client per call (stateless)
+- Sends `system_prompt` + `user_prompt` to `llama-3.3-70b-versatile`
+- `temperature=0.7`, `max_tokens=150`
+- Returns the LLM's text response, or a fallback error message
 
 ### `llm/prompts.py`
-- `SYSTEM_PROMPT`: Defines JARVIS personality (calm, intelligent, concise, emotionally aware)
-- `build_contextual_prompt()`: Injects live context (emotion, posture, weather) into the user's message as a `[SYSTEM CONTEXT]` prefix so the LLM can reason about the user's state
+- `SYSTEM_PROMPT`: 7 strict rules (max 2 sentences, never ask questions, reference real song names, etc.)
+- `build_contextual_prompt()`: Injects emotion, posture, weather, and action result into the user's message
 
-### `spotify/spotify_controller.py`
-- Uses **Spotipy** with `SpotifyOAuth` (scopes: `user-modify-playback-state`, `user-read-playback-state`)
-- `play_music(query=...)`: Searches Spotify for a playlist matching the query, finds an active device, starts playback
-- Device fallback: If no device is marked "active", uses the first available device
-- `pause_music()`: Pauses current playback
-- All methods return `(success_bool, message_string)` tuples
+### `spotify/spotify_controller.py` — Music Playback
+**OAuth Flow (web-compatible):**
+1. `get_auth_url()` → returns Spotify authorize URL
+2. User clicks link → Spotify redirects back with `?code=`
+3. `dashboard.py` catches `?code=` → calls `handle_callback(code)` → exchanges for token
+4. Token stored in `st.session_state.spotify_token_info`
+5. `_get_client()` reads token from session, auto-refreshes if expired
+6. Uses `MemoryCacheHandler()` — no filesystem cache (cloud-compatible)
+
+**`play_music(query)`:**
+1. Gets device list → picks active device (or first available)
+2. **Pauses current playback first** (prevents 403 mid-song errors)
+3. Waits 300ms for Spotify to settle
+4. Searches **tracks first** (`type="track"`) → returns `"Playing '{name}' by {artist}"`
+5. Falls back to **playlist search** if no track found
+6. Handles Premium-required and no-device errors specifically
+
+**`pause_music()`:**
+1. Checks `current_playback()` — if already paused, returns `"Music is already paused."`
+2. Only calls `pause_playback()` if something is actually playing
 
 ### `weather/weather_service.py`
-- Calls **OpenWeather API** (`/data/2.5/weather`) with metric units
-- Caches result for the entire session (no TTL — simple MVP cache)
-- Returns dict: `{temperature, humidity, condition, icon}`
-- On failure, returns `{temperature: "unknown", ...}`
-
-### `logic/decision_engine.py`
-- **The brain of JARVIS** — Central orchestrator
-- `process_voice_command()`: Takes transcribed text + context →
-  1. Runs **local intent matching** (keyword-based) for "play music", "pause", "stop music"
-  2. If music intent detected → calls `spotify.play_music()` with emotion-appropriate playlist
-  3. Always generates a **Groq LLM response** with full context (emotion, posture, weather)
-  4. Returns `{response, action, action_msg}`
-- `evaluate_autonomous_state()`: Called by the background thread →
-  - If emotion is `sad` or `angry` AND confidence > 70% → suggests playing mood-appropriate music
-  - Otherwise returns `{suggested_action: None}`
-
-### `logic/autonomous_controller.py`
-- Runs a **daemon thread** that polls every 5 seconds
-- Has a **cooldown** of 60 seconds between suggestions (prevents spam)
-- Thread-safe state updates via `threading.Lock`
-- Flow: `_loop()` → reads state → calls `decision_engine.evaluate_autonomous_state()` → stores suggestion
-- UI polls `get_and_clear_suggestion()` — returns suggestion once, then clears it
-
-### `ui/dashboard.py`
-- The **entire Streamlit interface** in one file
-- **Sidebar**: Autonomous mode toggle, Spotify auth status, system logs
-- **Main body**: Weather widget, suggestion alerts, WebRTC video feed, voice recorder, chat history
-- Uses `@st.fragment(run_every=1.0)` to poll WebRTC processor for emotion/posture metrics without full page rerun
-- Uses `audio_recorder_streamlit` for browser-based mic recording
-- Deduplicates audio with MD5 hashing to prevent reprocessing on Streamlit reruns
-
-### `utils/logger.py`
-- Creates loggers with **two handlers**:
-  1. `StreamHandler` → stdout (for terminal/server logs)
-  2. `StreamlitSessionHandler` → pushes log messages into `st.session_state.system_logs` (for UI display)
-- Max 50 log entries in session state
+- Calls OpenWeather API with `settings.LOCATION` (default: "London, UK")
+- Returns `{temperature, humidity, condition, icon}`
+- Cached per session — only makes one API call per session
 
 ### `utils/helpers.py`
-- `get_spotify_playlist_for_emotion()`: Maps emotions to Spotify search queries
-  - happy → "energetic upbeat playlist"
-  - sad → "calm peaceful acoustic"
-  - angry → "relaxing chill lofi"
-  - neutral → "focus concentration instrumental"
-  - fear → "soothing ambient"
-  - surprise → "pop hits"
+- `get_spotify_playlist_for_emotion()` — maps emotion to Spotify search queries:
+
+| Emotion | Search Query |
+|---------|-------------|
+| happy | "top hits upbeat energetic playlist" |
+| sad | "sad emotional hindi songs arijit singh" |
+| angry | "lofi chill calm relaxing playlist" |
+| neutral | "top bollywood hindi songs playlist" |
+| fear | "soothing calm ambient playlist" |
+| surprise | "party hits popular songs playlist" |
+| disgust | "chill vibes relaxing music playlist" |
+
+### `utils/logger.py`
+- Dual-output logger:
+  - **stdout**: Standard Python logging with timestamps
+  - **Streamlit**: Pushes formatted messages to `st.session_state.system_logs` (max 50)
+- Every module uses `get_logger(__name__)` for consistent logging
 
 ---
 
-## 6. Data Flow Diagrams
+## 6. Voice Command Pipeline — Complete Data Flow
 
-### A. Webcam Frame Processing (runs continuously in background thread)
-
-```
-Browser Webcam
-     │
-     ▼
-streamlit-webrtc (WebRTC connection)
-     │
-     ▼
-JarvisVideoProcessor.recv(frame)     [vision/webrtc_processor.py]
-     │
-     ├── Every 10th frame:
-     │   ├── PostureDetector.detect_posture(frame)    [vision/posture_detector.py]
-     │   │   ├── Convert BGR → RGB
-     │   │   ├── MediaPipe PoseLandmarker.detect()
-     │   │   ├── Draw skeleton overlay
-     │   │   └── Return (posture_status, annotated_frame)
-     │   │
-     │   └── EmotionDetector.detect_emotion(frame)    [vision/emotion_detector.py]
-     │       ├── DeepFace.analyze(actions=['emotion'])
-     │       └── Return (emotion, confidence)
-     │
-     ├── Store results: self.latest_emotion, self.latest_posture
-     └── Return annotated frame to browser
-```
-
-### B. UI Metrics Polling (runs every 1 second on main thread)
+When a user clicks the mic and speaks, this exact sequence happens:
 
 ```
-@st.fragment(run_every=1.0) render_metrics()     [ui/dashboard.py]
-     │
-     ├── Read ctx.video_processor.latest_emotion
-     ├── Read ctx.video_processor.latest_posture
-     ├── Update st.session_state (current_emotion, current_posture)
-     ├── Update autonomous_controller state
-     └── Render st.metric() widgets
-```
+Step 1: RECORD
+  └─ audio_recorder() widget captures browser audio
+  └─ Returns raw audio bytes (WAV format, 16kHz)
 
-### C. Voice Command Flow
+Step 2: VALIDATE
+  └─ If len(audio_bytes) < 8000 → REJECTED (too short, ~0.5s = noise)
+  └─ Compute MD5 hash of audio
+  └─ If hash == last_audio_hash → REJECTED (duplicate)
+  └─ Set processing_voice = True (lock)
+  └─ Set last_transcript = "⏳ Transcribing..."
 
-```
-User clicks mic button in browser
-     │
-     ▼
-audio_recorder_streamlit captures audio bytes
-     │
-     ▼
-dashboard.py receives audio_bytes
-     │
-     ├── MD5 hash check (skip if same as last audio)
-     ├── Write to temp_audio.wav
-     │
-     ▼
-AudioTranscriber.transcribe_audio_async()     [voice/transcriber.py]
-     │
-     ├── POST audio to Deepgram API (/v1/listen?model=nova-2)
-     ├── Parse JSON response → transcript string
-     └── Delete temp file
-     │
-     ▼
-DecisionEngine.process_voice_command()     [logic/decision_engine.py]
-     │
-     ├── Intent Matching (keyword scan):
-     │   ├── "play music" → helpers.get_spotify_playlist_for_emotion(emotion)
-     │   │                 → spotify.play_music(query=...)
-     │   ├── "pause"/"stop" → spotify.pause_music()
-     │   └── anything else → no direct action
-     │
-     ├── LLM Response Generation:
-     │   ├── prompts.build_contextual_prompt(text, emotion, posture, weather)
-     │   ├── groq_client.get_response(SYSTEM_PROMPT, context_prompt)
-     │   └── Returns conversational text
-     │
-     └── Return {response, action, action_msg}
-     │
-     ▼
-dashboard.py appends to chat_history → st.rerun()
-```
+Step 3: TRANSCRIBE (voice/transcriber.py)
+  └─ POST audio to Deepgram API with keyword boosting
+  └─ Check word-level confidence → if avg < 0.55 → return "" (music bleed)
+  └─ Check music-bleed heuristic → if >15 words, no commands → return ""
+  └─ Return clean transcript string
 
-### D. Autonomous Suggestion Flow
+Step 4: FILTER (ui/dashboard.py)
+  └─ Store transcript in session state (for live display)
+  └─ If transcript is empty or starts with "Error" → log and skip
+  └─ Add to chat_history as user message
 
-```
-AutonomousController._loop()     [logic/autonomous_controller.py]
-     │                            (background daemon thread, polls every 5s)
-     │
-     ├── Check cooldown (60s since last suggestion)
-     ├── Read thread-safe state (emotion, confidence, posture, weather)
-     │
-     ▼
-DecisionEngine.evaluate_autonomous_state()     [logic/decision_engine.py]
-     │
-     ├── IF emotion in [sad, angry] AND confidence > 0.70:
-     │   └── Return {suggested_action: "play_music", query: "...", message: "..."}
-     └── ELSE: Return {suggested_action: None}
-     │
-     ▼
-AutonomousController stores suggestion (thread-safe)
-     │
-     ▼
-dashboard.py polls get_and_clear_suggestion() on each rerun
-     │
-     ├── Renders suggestion alert with Accept/Dismiss buttons
-     ├── Accept → spotify.play_music(query=...) → log_system()
-     └── Dismiss → clear suggestion → st.rerun()
+Step 5: DECIDE (logic/decision_engine.py)
+  └─ Check PAUSE keywords first (highest priority)
+  │     └─ If found → spotify.pause_music() → action = "paused"
+  └─ Check PLAY keywords
+  │     └─ Extract search query via regex patterns
+  │     └─ If specific query found → spotify.play_music(query=...)
+  │     └─ If generic → emotion fallback → spotify.play_music(query=emotion_playlist)
+  └─ If no intent matched → no action taken
+
+Step 6: RESPOND (llm/groq_client.py)
+  └─ Build contextual prompt with emotion + posture + weather + action result
+  └─ Send to Groq LLM (Llama 3.3 70B)
+  └─ LLM responds in ≤2 sentences, referencing real song names
+  └─ Add response to chat_history as jarvis message
+
+Step 7: DISPLAY
+  └─ Set processing_voice = False (unlock)
+  └─ st.rerun() → UI refreshes with new chat messages + transcript display
 ```
 
 ---
 
-## 7. Interaction Sequences
-
-### Sequence 1: User Opens App for the First Time
+## 7. WebRTC Camera Pipeline — Complete Data Flow
 
 ```
-1. Browser loads → Streamlit serves app.py
-2. app.py calls render_dashboard()
-3. preload_models() runs (cache miss) → downloads DeepFace weights (~30s)
-4. initialize_session_state() creates all services
-5. WeatherService.get_weather() fetches weather from OpenWeather API
-6. UI renders with:
-   - Warning if any API keys are missing
-   - Weather info bar
-   - WebRTC streamer (camera not started yet)
-   - Voice recorder button
-   - Empty chat history
-```
+Step 1: CONNECT
+  └─ webrtc_streamer() creates WebRTC connection from browser to server
+  └─ Uses STUN servers (Google) for NAT discovery
+  └─ Uses TURN servers (openrelay.metered.ca) for firewall relay
+  └─ media_stream_constraints: video=True, audio=False
 
-### Sequence 2: User Starts the Camera
+Step 2: RECEIVE (vision/webrtc_processor.py)
+  └─ recv() called for every frame from browser
+  └─ Increments frame counter
 
-```
-1. User clicks "START" on the WebRTC streamer widget
-2. Browser requests camera permission
-3. WebRTC connection established (using STUN/TURN servers for NAT traversal)
-4. JarvisVideoProcessor() created on server side
-   - EmotionDetector() instantiated (weights already cached)
-   - PostureDetector() instantiated (downloads model if needed)
-5. recv() called for every incoming frame
-6. Every 10th frame: posture + emotion analyzed
-7. @st.fragment polls processor attributes every 1s → updates UI metrics
-```
+Step 3: ANALYZE (every 10th frame)
+  └─ PostureDetector.detect_posture(frame)
+  │     └─ MediaPipe Pose → nose/shoulder landmarks
+  │     └─ Heuristic: nose above shoulders → "upright", else "slouched"
+  │     └─ Draws skeleton on frame
+  └─ EmotionDetector.detect_emotion(frame)
+        └─ DeepFace.analyze() → dominant emotion + confidence
+        └─ Frame-skips internally (every 5th call)
 
-### Sequence 3: User Speaks a Voice Command
+Step 4: STORE
+  └─ self.latest_emotion = "happy"
+  └─ self.latest_emotion_conf = 0.87
+  └─ self.latest_posture = "upright"
 
-```
-1. User clicks mic → speaks "play some happy music" → stops recording
-2. audio_bytes received → MD5 hash computed → different from last → proceed
-3. Audio written to temp_audio.wav
-4. Deepgram API transcribes → "play some happy music"
-5. DecisionEngine.process_voice_command() called:
-   a. "play music" detected in text
-   b. Current emotion = "happy"
-   c. helpers.get_spotify_playlist_for_emotion("happy") → "energetic upbeat playlist"
-   d. spotify.play_music(query="energetic upbeat playlist")
-   e. Spotify searches → finds playlist → starts playback on active device
-   f. LLM generates conversational response with full context
-6. Chat history updated with user message + JARVIS response
-7. System log updated with action result
-8. st.rerun() refreshes the UI
-```
+Step 5: POLL (ui/dashboard.py @st.fragment every 1 second)
+  └─ render_metrics() reads ctx.video_processor.latest_emotion/conf/posture
+  └─ Updates st.session_state.current_emotion / emotion_confidence / current_posture
+  └─ Updates autonomous controller state
+  └─ Displays 3-column metrics: [Emotion] [Confidence] [Posture]
 
-### Sequence 4: Autonomous Mode Triggers a Suggestion
-
-```
-1. User toggles "Enable JARVIS Brain" → autonomous.start()
-2. Background thread starts polling every 5 seconds
-3. Webcam detects emotion="sad", confidence=0.85 for sustained period
-4. Thread reads state → calls evaluate_autonomous_state()
-5. Condition met (sad + conf>0.70) → suggestion created:
-   "I detected you might be feeling sad. Would you like me to play a calm peaceful acoustic playlist?"
-6. Cooldown timer set (no new suggestions for 60s)
-7. Next UI rerun: get_and_clear_suggestion() returns the suggestion
-8. Green alert box appears with Accept/Dismiss buttons
-9. User clicks Accept → spotify.play_music(query="calm peaceful acoustic")
+Step 6: RETURN
+  └─ recv() returns annotated frame (with pose skeleton)
+  └─ Browser displays the annotated video feed
 ```
 
 ---
 
-## 8. Decision Engine Logic
-
-The `DecisionEngine` is the **central brain**. It has two modes:
-
-### Mode A: Reactive (Voice Command)
-
-```python
-process_voice_command(text, emotion, posture, weather)
-```
-
-**Step 1 — Local Intent Matching** (fast, no API call):
-| Keywords in text | Action Taken |
-|---|---|
-| "play music", "play some music" | `spotify.play_music(query=emotion_playlist)` |
-| "pause", "stop music" | `spotify.pause_music()` |
-| anything else | No direct action |
-
-**Step 2 — LLM Response** (always runs):
-- Builds contextual prompt with `[SYSTEM CONTEXT: emotion, posture, weather]`
-- Calls Groq API with JARVIS system prompt
-- Returns natural language response
-
-### Mode B: Proactive (Autonomous Evaluation)
-
-```python
-evaluate_autonomous_state(emotion, confidence, posture, weather)
-```
-
-| Condition | Result |
-|---|---|
-| emotion ∈ {sad, angry} AND confidence > 0.70 | Suggest mood-appropriate playlist |
-| All other states | No suggestion |
-
----
-
-## 9. Autonomous Mode Deep Dive
-
-### Threading Model
+## 8. Spotify OAuth Flow — Complete Sequence
 
 ```
-Main Thread (Streamlit)              Background Thread (Daemon)
-─────────────────────               ────────────────────────
-│                                    │
-│ autonomous.start()  ──────────▶   Thread starts
-│                                    │
-│                                    ├── sleep(5s)
-│                                    ├── lock → read state
-│                                    ├── decision_engine.evaluate_autonomous_state()
-│                                    ├── if suggestion → lock → store suggestion
-│                                    └── loop ↑
-│
-│ render_dashboard() reruns
-│ ├── get_and_clear_suggestion() ◀── lock → read & clear
-│ └── Render suggestion UI
-│
-│ autonomous.stop()  ──────────▶    is_running = False → thread exits
-```
-
-### Thread Safety
-
-- All shared state is protected by `threading.Lock`
-- `update_state()` — called by UI fragment every 1s — acquires lock
-- `_loop()` — background thread — acquires lock to read state and write suggestions
-- `get_and_clear_suggestion()` — called by UI — acquires lock, reads and clears
-
-### Cooldown Mechanism
-
-- After a suggestion is generated, `last_action_time` is set to `time.time()`
-- The loop skips evaluation if `now - last_action_time < 60 seconds`
-- This prevents JARVIS from spamming suggestions every 5 seconds
-
----
-
-## 10. External API Integration Map
-
-| API | File | Endpoint | Auth Method | Data Used |
-|---|---|---|---|---|
-| **Deepgram** | `voice/transcriber.py` | `POST /v1/listen?model=nova-2` | Bearer Token header | Audio → transcript text |
-| **Groq** | `llm/groq_client.py` | Groq SDK (Chat Completions) | API Key in constructor | Prompt → LLM response |
-| **Spotify** | `spotify/spotify_controller.py` | Spotipy SDK (OAuth) | OAuth2 PKCE flow | Search playlists, control playback |
-| **OpenWeather** | `weather/weather_service.py` | `GET /data/2.5/weather` | `appid` query param | City → temp, humidity, condition |
-
-### API Key Loading Chain
-
-```
-.env file
-  ↓
-config/settings.py → load_dotenv(override=True)
-  ↓
-os.getenv("KEY_NAME") → property on Settings singleton
-  ↓
-Each service reads settings.KEY_NAME at call time (lazy)
+Step 1: User opens app → sidebar shows "Spotify not connected"
+Step 2: User clicks "Connect Spotify" link
+Step 3: Browser navigates to Spotify authorize URL
+Step 4: User grants permission on Spotify's website
+Step 5: Spotify redirects back to app with ?code=XXXXX in URL
+Step 6: dashboard.py detects ?code= in st.query_params
+Step 7: spotify.handle_callback(code) exchanges code for access_token + refresh_token
+Step 8: Token stored in st.session_state.spotify_token_info
+Step 9: URL params cleared, page reruns
+Step 10: Sidebar shows "Spotify connected" ✓
+Step 11: All subsequent spotify.play_music() / pause_music() calls use stored token
+Step 12: If token expires, _get_client() auto-refreshes using refresh_token
 ```
 
 ---
 
-## 11. Session State Architecture
+## 9. Autonomous Mode — Background Brain
 
-All persistent state lives in `st.session_state`. Here's the complete map:
+```
+When user toggles "Enable JARVIS Brain" ON:
 
-| Key | Type | Set By | Read By | Purpose |
-|---|---|---|---|---|
-| `initialized` | bool | `initialize_session_state()` | `initialize_session_state()` | Prevent re-initialization |
-| `transcriber` | AudioTranscriber | init | dashboard (voice flow) | Speech-to-text service |
-| `groq` | GroqClient | init | DecisionEngine | LLM service |
-| `spotify` | SpotifyController | init | DecisionEngine, dashboard | Music control |
-| `weather_svc` | WeatherService | init | dashboard | Weather fetcher |
-| `decision_engine` | DecisionEngine | init | dashboard, autonomous | Central brain |
-| `autonomous` | AutonomousController | init | dashboard | Background AI loop |
-| `current_emotion` | str | render_metrics fragment | dashboard, autonomous | Latest detected emotion |
-| `emotion_confidence` | float | render_metrics fragment | autonomous | Latest confidence score |
-| `current_posture` | str | render_metrics fragment | dashboard, autonomous | Latest posture state |
-| `weather` | dict | init | dashboard, decision_engine | Cached weather data |
-| `chat_history` | list[dict] | voice flow | dashboard chat UI | Conversation log |
-| `system_logs` | list[str] | log_system(), logger | sidebar logs panel | Debug/info messages |
-| `autonomous_mode` | bool | sidebar toggle | dashboard | Whether brain is active |
-| `last_audio_hash` | str | voice flow | voice flow | Dedup audio recordings |
-| `pending_suggestion` | dict | autonomous poll | suggestion UI | Queued AI suggestion |
+  └─ AutonomousController.start()
+  └─ Spawns daemon thread running _loop()
+  └─ Every 5 seconds:
+       └─ Read current emotion, confidence, posture, weather (thread-safe lock)
+       └─ If emotion is "sad" or "angry" AND confidence > 70%:
+            └─ Generate suggestion with emotion-mapped playlist
+            └─ Store in self.latest_suggestion
+            └─ Set 60-second cooldown
+       └─ Dashboard polls get_and_clear_suggestion() on every render
+       └─ If suggestion exists:
+            └─ Show green alert: "💡 JARVIS Suggestion: ..."
+            └─ Accept button → plays the suggested playlist
+            └─ Dismiss button → clears suggestion
+```
 
 ---
 
-## 12. Error Handling Strategy
+## 10. Anti-Spam and Quality Filters
 
-### Principle: Never Crash, Always Degrade
-
-| Component | Failure Mode | Handling |
-|---|---|---|
-| DeepFace | No face detected | `enforce_detection=False` → returns neutral |
-| DeepFace | Model download fails | `preload_models()` catches → shows spinner |
-| MediaPipe | No body detected | Returns `posture="unknown"` |
-| Deepgram | API key missing | Returns error message string |
-| Deepgram | API call fails | Returns `"Error: {details}"` as transcript |
-| Groq | API key missing | Returns `"API key not configured"` |
-| Groq | API call fails | Returns `"Sorry, I encountered an error"` |
-| Spotify | Not authenticated | Shows auth link in sidebar |
-| Spotify | No active device | Returns `"No active devices found"` message |
-| Spotify | Playlist not found | Returns `"Could not find playlist"` |
-| OpenWeather | API fails | Returns `{temperature: "unknown", ...}` |
-| WebRTC | Processing error | Logs error, returns raw frame |
-| Audio | Same audio resubmitted | MD5 hash dedup prevents reprocessing |
-| Any service | Missing .env keys | Warning banner with list of missing keys |
-
-### Logging Dual-Path
-
-Every error is logged to:
-1. **stdout** (terminal) via `logging.StreamHandler`
-2. **Streamlit UI** (sidebar logs panel) via custom `StreamlitSessionHandler`
+| Filter | Location | What it does |
+|--------|----------|-------------|
+| Min audio length | dashboard.py | Rejects recordings < 8000 bytes (~0.5s) |
+| Duplicate hash | dashboard.py | MD5 hash comparison prevents same audio processing twice |
+| Processing lock | dashboard.py | `processing_voice` flag prevents concurrent transcriptions |
+| Keyword boost | transcriber.py | Deepgram prioritizes "play", "pause", "stop" (weight 5) |
+| Confidence filter | transcriber.py | Avg word confidence < 55% → rejected (background music) |
+| Music-bleed filter | transcriber.py | >15 words with no command words → rejected (song lyrics) |
+| Empty transcript | dashboard.py | Empty or error transcripts logged but not sent to engine |
+| Pause-before-switch | spotify_controller.py | Pauses + 300ms delay before starting new track |
 
 ---
 
-## Summary
+## 11. Environment Variables Required
 
-JARVIS is a **Perception → Decision → Action** system where:
+```env
+# Spotify (get from developer.spotify.com/dashboard)
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+SPOTIFY_REDIRECT_URI=https://your-app.streamlit.app/
 
-1. **Perception** (vision + voice + weather) feeds raw data
-2. **Decision** (DecisionEngine + AutonomousController + Groq LLM) interprets and reasons
-3. **Action** (Spotify playback + chat responses + UI suggestions) executes
+# Deepgram (get from console.deepgram.com)
+DEEPGRAM_API_KEY=your_deepgram_api_key
 
-The UI layer (`dashboard.py`) orchestrates everything through Streamlit's session state, while the WebRTC video processor and autonomous controller run in separate threads for non-blocking real-time processing.
+# Groq (get from console.groq.com)
+GROQ_API_KEY=your_groq_api_key
+
+# OpenWeather (get from openweathermap.org/api)
+OPENWEATHER_API_KEY=your_openweather_api_key
+
+# Optional
+LOCATION=London, UK
+CAMERA_INDEX=0
+```
+
+---
+
+## 12. Dependencies
+
+```
+streamlit>=1.30.0           ← UI framework
+tornado<6.4                 ← Streamlit compatibility
+opencv-python-headless>=4.8 ← Image processing (DeepFace needs it)
+deepface>=0.0.79            ← Facial emotion detection
+mediapipe>=0.10.9           ← Pose/posture detection
+streamlit-webrtc>=0.47.0    ← Browser webcam via WebRTC
+av>=10.0.0                  ← Video frame handling for WebRTC
+audio-recorder-streamlit    ← Browser microphone recorder
+pydub>=0.25.1               ← Audio processing
+groq>=0.4.0                 ← Groq LLM API client
+spotipy>=2.23.0             ← Spotify Web API client
+python-dotenv>=1.0.0        ← .env file loading
+requests>=2.31.0            ← HTTP client (Deepgram, Weather)
+numpy>=1.26.0               ← Array operations
+tf-keras>=2.15.0            ← DeepFace backend dependency
+```
+
+---
+
+## 13. How to Run Locally
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/kaustubh-d-IITR/JARVIS.git
+cd JARVIS
+
+# 2. Create virtual environment
+python -m venv venv
+venv\Scripts\activate        # Windows
+source venv/bin/activate     # Mac/Linux
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Create .env file with your API keys (see Section 11)
+
+# 5. Run
+streamlit run app.py
+```
+
+---
+
+## 14. Known Constraints
+
+1. **Spotify Premium Required** — Playback control (play/pause) only works with Spotify Premium accounts.
+2. **Active Device Required** — Spotify must be open on at least one device (phone, desktop, or web player).
+3. **WebRTC on Cloud** — Camera requires TURN servers for NAT traversal on Streamlit Cloud (configured).
+4. **DeepFace Cold Start** — First boot downloads ~300MB of model weights. Subsequent boots are cached.
+5. **Single User** — Session state is per-browser-tab. Each user gets their own isolated session.
