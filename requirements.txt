@@ -3,7 +3,6 @@ tornado<6.4
 opencv-python-headless>=4.8.0
 deepface>=0.0.79
 mediapipe>=0.10.9
-streamlit-webrtc>=0.47.0
 audio-recorder-streamlit>=0.0.10
 pydub>=0.25.1
 groq>=0.4.0
