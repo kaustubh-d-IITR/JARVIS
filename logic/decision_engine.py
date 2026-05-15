@@ -18,39 +18,67 @@ class DecisionEngine:
         self.spotify = spotify_client
         self._last_emotion = "neutral"
 
-    def _extract_search_query(self, text: str) -> str:
+    def _extract_search_query(self, text: str):
         """
         Extract the actual song/artist search query from user text.
+        Returns a search string, or None if nothing specific was found.
         Examples:
           "play Blue Eyes by Arijit Singh" -> "Blue Eyes Arijit Singh"
-          "play a sad song of Arijit Singh" -> "sad Arijit Singh"
-          "play some rap by Sidhu Moosewala" -> "rap Sidhu Moosewala"
-          "play music" -> use emotion-based fallback
+          "play music by Arijit Singh" -> "Arijit Singh"
+          "play Tum Hi Ho" -> "Tum Hi Ho"
+          "play music" -> None (triggers emotion fallback)
         """
-        text_lower = text.lower()
+        text_clean = text.strip()
+        text_lower = text_clean.lower()
 
-        # Remove filler words to get the core query
-        remove_words = [
-            "play", "put on", "start playing", "i want to listen to",
-            "can you play", "please play", "play me", "play a", "play some",
-            "play the", "song", "music", "track", "a song", "some music",
-            "for me", "please", "can you", "i want", "i would like",
-            "by", "of", "from", "sung by"
-        ]
+        # Pattern 1: "play X by Y" or "play X of Y" — extract "X Y"
+        match = re.search(
+            r'play\s+(?:a\s+|the\s+|some\s+|me\s+)?(?:song\s+|music\s+|track\s+)?'
+            r'(?:called\s+|named\s+)?(.+?)\s+(?:by|of|from|sung by)\s+(.+)',
+            text_lower
+        )
+        if match:
+            song_part = match.group(1).strip()
+            artist_part = match.group(2).strip()
+            # Remove trailing filler from artist
+            for filler in ["please", "for me", "now", "today"]:
+                artist_part = artist_part.replace(filler, "").strip()
+            if song_part in ["a", "the", "some", "music", "song", ""]:
+                return artist_part  # just artist name
+            return f"{song_part} {artist_part}"
 
-        query = text_lower
-        for word in remove_words:
-            query = query.replace(word, " ")
+        # Pattern 2: "play by Y" or "play music by Y" — just artist
+        match = re.search(
+            r'(?:play|music|song)\s+(?:by|of|from|sung by)\s+(.+)',
+            text_lower
+        )
+        if match:
+            artist = match.group(1).strip()
+            for filler in ["please", "for me", "now", "today"]:
+                artist = artist.replace(filler, "").strip()
+            return artist
 
-        # Clean up extra spaces
-        query = " ".join(query.split()).strip()
+        # Pattern 3: "play [artist name] song/music"
+        match = re.search(
+            r'play\s+(.+?)\s+(?:song|music|track|playlist)',
+            text_lower
+        )
+        if match:
+            return match.group(1).strip()
 
-        # If query is empty or too short after stripping,
-        # fall back to emotion-based playlist
-        if len(query) < 3:
-            return get_spotify_playlist_for_emotion(self._last_emotion)
+        # Pattern 4: Direct name after play
+        # "play Tum Hi Ho" "play Shape of You"
+        match = re.search(r'play\s+(.+)', text_lower)
+        if match:
+            result = match.group(1).strip()
+            # Remove generic words that mean "nothing specific"
+            generic = ["music", "song", "a song", "the music",
+                       "something", "anything", "some music"]
+            if result.lower() in generic:
+                return None  # signal: use emotion fallback
+            return result
 
-        return query
+        return None  # signal: use emotion fallback
 
     def process_voice_command(self, text: str, emotion: str = "neutral",
                                posture: str = "unknown", weather: dict = None) -> dict:
@@ -81,23 +109,7 @@ class DecisionEngine:
         if len(words) <= 3 and any(w in HARD_STOP_WORDS for w in words):
             pause_intent = True
 
-        # ── PRIORITY 2: SPECIFIC SONG/ARTIST REQUEST ──
-        # Detect if user named a specific song or artist
-        SPECIFIC_INDICATORS = [
-            " by ", " of ", " from ", "song called", "track called",
-            "sung by", "artist", "album", "singer"
-        ]
-        has_specific_request = any(ind in text_lower for ind in SPECIFIC_INDICATORS)
-
-        # Also treat as specific if user mentions a content word after "play"
-        # (non-common word that isn't a filler)
-        COMMON_WORDS = {"play", "music", "song", "a", "the", "some",
-                        "please", "me", "for", "any", "something", "now"}
-        content_words = [w for w in words if w not in COMMON_WORDS and len(w) > 3]
-        if len(content_words) >= 1:
-            has_specific_request = True
-
-        # ── PRIORITY 3: GENERIC PLAY (weather/emotion based) ──
+        # ── PRIORITY 2: PLAY INTENT ──
         PLAY_WORDS = ["play", "put on", "start", "listen", "music", "song"]
         play_intent = any(word in text_lower for word in PLAY_WORDS)
 
@@ -110,17 +122,18 @@ class DecisionEngine:
             success, action_msg = self.spotify.pause_music()
             action = "paused"
 
-        elif play_intent and has_specific_request:
-            # User named something specific — search for exactly that
-            search_query = self._extract_search_query(text)
-            success, action_msg = self.spotify.play_music(query=search_query)
-            action = f"playing: {action_msg}"
-
         elif play_intent:
-            # Generic play — use emotion context
-            query = get_spotify_playlist_for_emotion(self._last_emotion)
-            success, action_msg = self.spotify.play_music(query=query)
-            action = f"playing: {action_msg}"
+            search_query = self._extract_search_query(text)
+
+            if search_query:
+                # User specified something — search for exactly that
+                success, action_msg = self.spotify.play_music(query=search_query)
+                action = f"playing: {action_msg}"
+            else:
+                # Truly generic request — use emotion/weather context
+                query = get_spotify_playlist_for_emotion(self._last_emotion)
+                success, action_msg = self.spotify.play_music(query=query)
+                action = f"playing: {action_msg}"
 
         # Generate conversational response AFTER action so LLM knows what happened
         try:
