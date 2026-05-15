@@ -120,19 +120,21 @@ def main():
     header("5. Webcam Access")
     try:
         import cv2
-        cap = cv2.VideoCapture(0)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                h, w = frame.shape[:2]
-                ok(f"Webcam accessible — resolution {w}x{h}")
-            else:
-                warn("Webcam opened but could not read a frame")
-                warnings += 1
-            cap.release()
-        else:
-            fail("Could not open webcam at index 0")
-            errors += 1
+        cam_found = False
+        for idx in [0, 1, 2]:
+            cap = cv2.VideoCapture(idx)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    h, w = frame.shape[:2]
+                    ok(f"Webcam accessible at index {idx} -- resolution {w}x{h}")
+                    cam_found = True
+                    cap.release()
+                    break
+                cap.release()
+        if not cam_found:
+            warn("No webcam detected on indices 0-2 (may be in use by another app)")
+            warnings += 1
     except Exception as e:
         fail(f"Webcam error: {e}")
         errors += 1

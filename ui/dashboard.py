@@ -208,29 +208,33 @@ def render_dashboard():
                     vp.stop()
                     st.rerun()
 
-        # Live feed display
-        if vp._running:
+        # Live feed + metrics — MUST be in same fragment to update together
+        @st.fragment(run_every=0.5)
+        def render_live_feed():
+            if "video_processor" not in st.session_state:
+                return
+            vp = st.session_state.video_processor
+
+            if not vp._running:
+                # Check if there's an error message from a failed start
+                debug = vp.get_debug_state()
+                if debug.get("error"):
+                    st.error(f"Camera Error: {debug['error']}")
+                return
+
+            # Get and display frame
             frame = vp.get_frame()
             if frame is not None:
                 st.image(
                     frame,
                     channels="RGB",
                     use_container_width=True,
-                    caption="Live Perception Feed"
                 )
             else:
                 st.info("⏳ Initializing camera and loading AI model...")
-        else:
-            st.info("Click START Camera to begin emotion detection.")
-
-        @st.fragment(run_every=1.0)
-        def render_metrics():
-            if "video_processor" not in st.session_state:
-                return
-            vp = st.session_state.video_processor
-            if not vp._running:
                 return
 
+            # Get state and display metrics
             emotion, conf, posture = vp.get_state()
 
             # Update session state
@@ -255,7 +259,7 @@ def render_dashboard():
 
             st.caption(f"Dominant emotion over last 3 seconds: "
                        f"**{emotion}** at {conf:.0%} confidence")
-        render_metrics()
+        render_live_feed()
 
         st.divider()
 
