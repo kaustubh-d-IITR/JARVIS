@@ -6,6 +6,20 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Expanded keyword lists for robust intent matching
+PLAY_KEYWORDS = [
+    "play", "music", "song", "songs", "playlist",
+    "put on", "start music", "play something",
+    "play a", "play some", "i want to listen",
+    "put some", "turn on music"
+]
+
+PAUSE_KEYWORDS = [
+    "pause", "stop", "stop music", "turn off music",
+    "no music", "quiet"
+]
+
+
 class DecisionEngine:
     """
     Central logic that decides what JARVIS should say or do based on context.
@@ -22,21 +36,32 @@ class DecisionEngine:
         """
         action = None
         action_msg = ""
+        action_taken = False
         text_lower = text.lower()
         
-        # Simple local intent matching for hardcoded commands
-        if "play music" in text_lower or "play some music" in text_lower:
+        # --- Intent Matching (expanded keyword scan) ---
+        music_intent = any(kw in text_lower for kw in PLAY_KEYWORDS)
+        pause_intent = any(kw in text_lower for kw in PAUSE_KEYWORDS)
+        
+        # Pause takes priority if both somehow match (e.g. "stop playing music")
+        if pause_intent:
+            success, msg = self.spotify.pause_music()
+            action = "paused_music"
+            action_msg = msg
+            action_taken = True
+        elif music_intent:
             playlist_query = get_spotify_playlist_for_emotion(emotion)
             success, msg = self.spotify.play_music(query=playlist_query)
             action = "played_music"
             action_msg = msg
-        elif "pause" in text_lower or "stop music" in text_lower:
-            success, msg = self.spotify.pause_music()
-            action = "paused_music"
-            action_msg = msg
+            action_taken = True
             
-        # Generate conversational response
-        context_prompt = build_contextual_prompt(text, emotion, posture, weather)
+        # Generate conversational response AFTER action so LLM knows what happened
+        context_prompt = build_contextual_prompt(
+            text, emotion, posture, weather,
+            action_taken=action_taken,
+            action_msg=action_msg
+        )
         llm_response = self.groq.get_response(SYSTEM_PROMPT, context_prompt)
         
         return {
