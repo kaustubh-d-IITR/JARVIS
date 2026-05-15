@@ -207,8 +207,18 @@ def render_dashboard():
             
         st.divider()
         st.subheader("🎙️ Speak to JARVIS")
-        audio_bytes = audio_recorder(text="Click to record voice command", recording_color="#e8b320", neutral_color="#6aa36f", icon_name="microphone")
-        st.caption("💡 Tip: Lower your speaker volume or use headphones before giving voice commands for best results.")
+        audio_bytes = audio_recorder(
+            text="Click to record",
+            recording_color="#e74c3c",
+            neutral_color="#27ae60",
+            icon_name="microphone",
+            icon_size="2x",
+            pause_threshold=5.0,
+            sample_rate=16000,
+            energy_threshold=0.01
+        )
+        st.caption("🎙️ Click mic → speak your command → click again to stop. "
+                   "For best results, lower speaker volume while recording.")
         
         if audio_bytes:
             audio_hash = hashlib.md5(audio_bytes).hexdigest()
