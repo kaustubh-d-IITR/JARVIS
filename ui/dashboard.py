@@ -10,6 +10,7 @@ from logic.decision_engine import DecisionEngine
 from logic.autonomous_controller import AutonomousController
 from voice.transcriber import AudioTranscriber
 
+from streamlit_webrtc import webrtc_streamer
 from vision.webrtc_processor import JarvisVideoProcessor
 from audio_recorder_streamlit import audio_recorder
 
@@ -24,9 +25,6 @@ def initialize_session_state():
         
         st.session_state.decision_engine = DecisionEngine(st.session_state.groq, st.session_state.spotify)
         st.session_state.autonomous = AutonomousController(st.session_state.decision_engine)
-        
-        if "video_processor" not in st.session_state:
-            st.session_state.video_processor = JarvisVideoProcessor()
         
         # State Tracking
         st.session_state.current_emotion = "neutral"
@@ -58,8 +56,6 @@ def preload_models():
 
 def render_dashboard():
     st.set_page_config(page_title="JARVIS AI Assistant", layout="wide", initial_sidebar_state="expanded")
-    if "video_processor" not in st.session_state:
-        st.session_state.video_processor = JarvisVideoProcessor()
     preload_models()
     initialize_session_state()
     
@@ -149,52 +145,49 @@ def render_dashboard():
     col_vision, col_chat = st.columns([1, 1])
 
     with col_vision:
-        # OpenCV Camera Feed
-        if "video_processor" not in st.session_state:
-            st.session_state.video_processor = JarvisVideoProcessor()
-        vp = st.session_state.video_processor
-
-        col_btn1, col_btn2 = st.columns([1, 1])
-        with col_btn1:
-            if not vp._running:
-                if st.button("▶ START", key="cam_start", type="primary"):
-                    vp.start()
-                    st.rerun()
-            else:
-                if st.button("⏹ STOP", key="cam_stop"):
-                    vp.stop()
-                    st.rerun()
-
-        @st.fragment(run_every=0.1)
-        def render_camera_feed():
-            if vp._running:
-                frame = vp.get_frame()
-                if frame is not None:
-                    st.image(frame, channels="RGB", use_container_width=True)
-                else:
-                    st.info("Starting camera...")
-        render_camera_feed()
+        # WebRTC Camera Feed (browser-side capture)
+        ctx = webrtc_streamer(
+            key="jarvis-webcam",
+            video_processor_factory=JarvisVideoProcessor,
+            rtc_configuration={
+                "iceServers": [
+                    {"urls": "stun:stun.l.google.com:19302"},
+                    {"urls": "stun:stun1.l.google.com:19302"},
+                    {"urls": "stun:stun2.l.google.com:19302"},
+                    {
+                        "urls": "turn:openrelay.metered.ca:80",
+                        "username": "openrelayproject",
+                        "credential": "openrelayproject"
+                    },
+                    {
+                        "urls": "turn:openrelay.metered.ca:443",
+                        "username": "openrelayproject",
+                        "credential": "openrelayproject"
+                    }
+                ]
+            },
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
 
         @st.fragment(run_every=1.0)
         def render_metrics():
-            if "video_processor" in st.session_state:
-                vp_ref = st.session_state.video_processor
-                if vp_ref._running:
-                    emotion, conf, posture = vp_ref.get_state()
-                    st.session_state.current_emotion = emotion
-                    st.session_state.emotion_confidence = conf
-                    st.session_state.current_posture = posture
-                    if "autonomous" in st.session_state:
-                        st.session_state.autonomous.update_state(
-                            emotion=emotion,
-                            confidence=conf,
-                            posture=posture,
-                            weather=st.session_state.get("weather", {})
-                        )
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Emotion", emotion)
-                    col2.metric("Confidence", f"{conf:.0%}")
-                    col3.metric("Posture", posture)
+            if ctx is None or not ctx.state.playing:
+                return
+            if ctx.video_processor is None:
+                return
+            emotion = getattr(ctx.video_processor, 'latest_emotion', 'neutral')
+            conf = getattr(ctx.video_processor, 'latest_emotion_conf', 0.0)
+            posture = getattr(ctx.video_processor, 'latest_posture', 'unknown')
+            st.session_state.current_emotion = emotion
+            st.session_state.emotion_confidence = conf
+            st.session_state.current_posture = posture
+            if 'autonomous' in st.session_state:
+                st.session_state.autonomous.update_state(emotion, conf, posture, st.session_state.weather)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Emotion", emotion)
+            col2.metric("Confidence", f"{conf:.0%}")
+            col3.metric("Posture", posture)
         render_metrics()
             
         st.divider()
