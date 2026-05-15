@@ -4,15 +4,16 @@ logger = get_logger(__name__)
 
 def get_spotify_playlist_for_emotion(emotion: str) -> str:
     """
-    Returns a suitable search query or genre based on the detected emotion.
+    Returns a suitable search query based on the detected emotion.
+    Tuned for better Spotify search results with genre + mood keywords.
     """
-    emotion = emotion.lower()
     mapping = {
-        "happy": "energetic upbeat playlist",
-        "sad": "calm peaceful acoustic",
-        "angry": "relaxing chill lofi",
-        "neutral": "focus concentration instrumental",
-        "fear": "soothing ambient",
-        "surprise": "pop hits"
+        "happy":    "top hits upbeat energetic playlist",
+        "sad":      "sad emotional hindi songs arijit singh",
+        "angry":    "lofi chill calm relaxing playlist",
+        "neutral":  "top bollywood hindi songs playlist",
+        "fear":     "soothing calm ambient playlist",
+        "surprise": "party hits popular songs playlist",
+        "disgust":  "chill vibes relaxing music playlist",
     }
-    return mapping.get(emotion, "chill focus")
+    return mapping.get(emotion.lower(), "top hindi songs playlist")

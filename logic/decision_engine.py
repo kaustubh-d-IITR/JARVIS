@@ -7,12 +7,6 @@ import re
 
 logger = get_logger(__name__)
 
-PLAY_KEYWORDS = ["play", "put on", "start", "listen", "song",
-                 "music", "track", "sing"]
-
-PAUSE_KEYWORDS = ["pause", "stop", "stop music", "stop the music",
-                  "turn off", "no music", "quiet", "silence"]
-
 
 class DecisionEngine:
     """
@@ -58,7 +52,8 @@ class DecisionEngine:
 
         return query
 
-    def process_voice_command(self, text: str, emotion: str, posture: str, weather: dict) -> dict:
+    def process_voice_command(self, text: str, emotion: str = "neutral",
+                               posture: str = "unknown", weather: dict = None) -> dict:
         """
         Takes transcribed voice text and context, decides the action, and gets LLM response.
         Returns a dict with response text and optionally a suggested action.
@@ -66,28 +61,66 @@ class DecisionEngine:
         # Store emotion for fallback playlist selection
         self._last_emotion = emotion or "neutral"
 
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
+        words = text_lower.split()
 
-        # --- PAUSE/STOP INTENT (check first, higher priority) ---
-        pause_intent = any(kw in text_lower for kw in PAUSE_KEYWORDS)
+        # ── PRIORITY 1: STOP/PAUSE (highest priority, checked first) ──
+        # These words alone = pause, even if other words present
+        HARD_STOP_WORDS = [
+            "pause", "stop", "halt", "quiet", "silence",
+            "mute", "enough", "no music", "turn off music",
+            "stop music", "pause music", "stop the music",
+            "pause the music", "stop it", "pause it"
+        ]
 
-        # --- PLAY INTENT ---
-        play_intent = any(kw in text_lower for kw in PLAY_KEYWORDS)
+        # Check if ANY stop phrase appears in the text
+        pause_intent = any(word in text_lower for word in HARD_STOP_WORDS)
 
+        # Extra check: if text is very short (1-3 words) and contains
+        # stop-like words, treat as definite pause
+        if len(words) <= 3 and any(w in HARD_STOP_WORDS for w in words):
+            pause_intent = True
+
+        # ── PRIORITY 2: SPECIFIC SONG/ARTIST REQUEST ──
+        # Detect if user named a specific song or artist
+        SPECIFIC_INDICATORS = [
+            " by ", " of ", " from ", "song called", "track called",
+            "sung by", "artist", "album", "singer"
+        ]
+        has_specific_request = any(ind in text_lower for ind in SPECIFIC_INDICATORS)
+
+        # Also treat as specific if user mentions a content word after "play"
+        # (non-common word that isn't a filler)
+        COMMON_WORDS = {"play", "music", "song", "a", "the", "some",
+                        "please", "me", "for", "any", "something", "now"}
+        content_words = [w for w in words if w not in COMMON_WORDS and len(w) > 3]
+        if len(content_words) >= 1:
+            has_specific_request = True
+
+        # ── PRIORITY 3: GENERIC PLAY (weather/emotion based) ──
+        PLAY_WORDS = ["play", "put on", "start", "listen", "music", "song"]
+        play_intent = any(word in text_lower for word in PLAY_WORDS)
+
+        # ── EXECUTE IN PRIORITY ORDER ──
         action = None
         action_msg = ""
 
-        if pause_intent and not play_intent:
-            # Pure stop/pause command
-            success, msg = self.spotify.pause_music()
-            action = "pause"
-            action_msg = msg
-        elif play_intent:
-            # Extract what the user actually wants to play
+        if pause_intent:
+            # Always pause if stop word detected, regardless of other words
+            success, action_msg = self.spotify.pause_music()
+            action = "paused"
+
+        elif play_intent and has_specific_request:
+            # User named something specific — search for exactly that
             search_query = self._extract_search_query(text)
-            success, msg = self.spotify.play_music(query=search_query)
-            action = "play_music"
-            action_msg = msg
+            success, action_msg = self.spotify.play_music(query=search_query)
+            action = f"playing: {action_msg}"
+
+        elif play_intent:
+            # Generic play — use emotion context
+            query = get_spotify_playlist_for_emotion(self._last_emotion)
+            success, action_msg = self.spotify.play_music(query=query)
+            action = f"playing: {action_msg}"
 
         # Generate conversational response AFTER action so LLM knows what happened
         try:
@@ -117,7 +150,6 @@ class DecisionEngine:
         Called by the autonomous controller loop to see if JARVIS should suggest an action.
         Returns a dict with suggested_action or None.
         """
-        # MVP Behavior: Suggest playing music if the user is sad/angry and not currently doing anything.
         if emotion in ["sad", "angry"] and confidence > 0.70:
             playlist_query = get_spotify_playlist_for_emotion(emotion)
             suggestion_text = f"I detected you might be feeling {emotion}. Would you like me to play a {playlist_query} playlist?"
