@@ -10,7 +10,7 @@ from logic.decision_engine import DecisionEngine
 from logic.autonomous_controller import AutonomousController
 from voice.transcriber import AudioTranscriber
 
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from streamlit_webrtc import webrtc_streamer
 from vision.webrtc_processor import JarvisVideoProcessor
 from audio_recorder_streamlit import audio_recorder
 
@@ -147,18 +147,11 @@ def render_dashboard():
     with col_vision:
         # WebRTC Streamer
         ctx = webrtc_streamer(
-            key="jarvis-vision",
-            mode=WebRtcMode.SENDRECV,
+            key="jarvis-webcam",
             video_processor_factory=JarvisVideoProcessor,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
             media_stream_constraints={"video": True, "audio": False},
             async_processing=True,
-            desired_playing_state=True,
-            rtc_configuration={
-                "iceServers": [
-                    {"urls": ["stun:stun.l.google.com:19302"]},
-                    {"urls": ["stun:stun1.l.google.com:19302"]},
-                ]
-            }
         )
 
         if ctx.state.playing and ctx.video_processor:
