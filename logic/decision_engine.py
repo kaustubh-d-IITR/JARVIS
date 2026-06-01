@@ -3,6 +3,7 @@ from llm.prompts import SYSTEM_PROMPT, build_contextual_prompt
 from spotify.spotify_controller import SpotifyController
 from utils.helpers import get_spotify_playlist_for_emotion
 from utils.logger import get_logger
+from config.settings import settings
 import re
 
 logger = get_logger(__name__)
@@ -158,18 +159,58 @@ class DecisionEngine:
             "action_msg": action_msg
         }
 
-    def evaluate_autonomous_state(self, emotion: str, confidence: float, posture: str, weather: dict) -> dict:
+    def evaluate_autonomous_state(self, emotion: str, confidence: float, posture: str, weather: dict, face_detected: bool = True) -> dict:
         """
         Called by the autonomous controller loop to see if JARVIS should suggest an action.
-        Returns a dict with suggested_action or None.
+        Uses confidence-aware gating: High confidence = Action, Low confidence = Clarification.
+        Includes weather fallback if no face is detected.
         """
-        if emotion in ["sad", "angry"] and confidence > 0.70:
+        THRESHOLD = settings.EMOTION_CONFIDENCE_THRESHOLD
+        
+        # ── CASE 1: No Face Detected -> Weather Fallback ──
+        if not face_detected:
+            condition = weather.get('condition', '').lower()
+            temp = weather.get('temperature', 20)
+            
+            if 'rain' in condition or 'drizzle' in condition:
+                msg = "It's raining outside. How about some calm Lo-Fi music?"
+                query = "Calm Lo-Fi"
+            elif 'cloud' in condition:
+                msg = "It's a bit cloudy. Maybe some chill acoustic tracks?"
+                query = "Chill Acoustic"
+            elif temp > 25:
+                msg = "It's quite warm today! Feeling like some upbeat summer hits?"
+                query = "Summer Hits"
+            else:
+                msg = "I can't see you clearly, but I've picked some neutral background music based on the weather."
+                query = "Chill Study"
+                
+            return {
+                "suggested_action": "play_music",
+                "query": query,
+                "message": f"👁️ [No face detected] {msg}",
+                "source": "weather_fallback"
+            }
+
+        # ── CASE 2: Low Confidence -> Clarify ──
+        if confidence < THRESHOLD:
+            if emotion in ["sad", "angry", "excited"]:
+                return {
+                    "suggested_action": "clarify",
+                    "message": f"I'm sensing some {emotion}, but I'm not entirely sure. Would you like some music to match the mood?",
+                    "source": "gemini_low_conf"
+                }
+            return {"suggested_action": None}
+
+        # ── CASE 3: High Confidence -> Action ──
+        if emotion in ["sad", "angry", "excited", "happy", "tired"]:
             playlist_query = get_spotify_playlist_for_emotion(emotion)
-            suggestion_text = f"I detected you might be feeling {emotion}. Would you like me to play a {playlist_query} playlist?"
+            suggestion_text = f"I detected you're feeling {emotion}. Should I put on some music for that?"
             return {
                 "suggested_action": "play_music",
                 "query": playlist_query,
-                "message": suggestion_text
+                "message": suggestion_text,
+                "source": "gemini_high_conf"
             }
 
         return {"suggested_action": None}

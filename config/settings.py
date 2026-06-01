@@ -44,6 +44,15 @@ class Settings:
     @property
     def OPENWEATHER_API_KEY(self):
         return os.getenv("OPENWEATHER_API_KEY", "")
+
+    @property
+    def OPENROUTER_API_KEY(self):
+        return os.getenv("OPENROUTER_API_KEY", "")
+
+    @property
+    def VLM_MODEL(self):
+        # Reverting to confirmed working model
+        return "nvidia/nemotron-nano-12b-v2-vl:free"
         
     @property
     def LOCATION(self):
@@ -69,8 +78,5 @@ class Settings:
     def DEBUG_INFO(self):
         return DEBUG_INFO
 
-    @property
-    def FER_CHECKPOINT_PATH(self) -> str:
-        return os.getenv("FER_CHECKPOINT_PATH", "vision/fer_checkpoint.tar")
 
 settings = Settings()

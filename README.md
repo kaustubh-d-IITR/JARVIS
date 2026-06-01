@@ -1,54 +1,38 @@
-# JARVIS: Emotion-Aware AI Assistant
+# JARVIS: Multimodal AI Assistant (Gemini-Powered)
 
-JARVIS is a real-time, emotion-aware AI assistant built with Streamlit. It uses computer vision (OpenCV, DeepFace, MediaPipe) to detect user emotions and posture, voice recognition (Deepgram) to understand spoken commands, and Groq LLM to respond intelligently. It can also autonomously suggest and play Spotify music matching your emotional state.
+JARVIS is a real-time, emotion-aware AI assistant built with Streamlit. It uses **Gemini Vision AI** for multimodal emotional perception, voice recognition (Deepgram) to understand spoken commands, and Groq LLM to respond intelligently. It can also autonomously suggest and play Spotify music matching your emotional state.
 
-## Final Execution-Ready Setup
+## 🚀 Quick Start
 
-This project is now fully configured for local, CPU-friendly execution with robust background tasks and safe hardware handling.
+This project is now fully configured for high-fidelity multimodal analysis with a lightweight local footprint.
 
 ### Zero-to-Hero Execution Steps
 
 1. **Clone or Navigate to the Directory**:
    Open a terminal and navigate to your `JARVIS` folder.
 
-2. **Create a Virtual Environment (Recommended)**:
-   ```bash
-   python -m venv venv
-   # Windows:
-   venv\Scripts\activate
-   # Mac/Linux:
-   source venv/bin/activate
-   ```
+2. **Automated Setup**:
+   Run the setup script for your platform. This will create a virtual environment, install dependencies, and validate your core files.
+   
+   **Windows**: `setup_local.bat`
+   **Mac/Linux**: `bash setup_local.sh`
 
-3. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Environment Variables**:
-   You should already have your `.env` file populated based on `.env.example`. Ensure the following keys exist:
-   - `SPOTIFY_CLIENT_ID` & `SPOTIFY_CLIENT_SECRET`
-   - `SPOTIFY_REDIRECT_URI=http://127.0.0.1:8501/callback`
-   - `DEEPGRAM_API_KEY`
+3. **Environment Variables**:
+   Create a `.env` file based on `.env.example`. You **MUST** provide:
+   - `GEMINI_API_KEY` (Get from [Google AI Studio](https://aistudio.google.com/app/apikey))
    - `GROQ_API_KEY`
+   - `DEEPGRAM_API_KEY`
+   - `SPOTIFY_CLIENT_ID` & `SPOTIFY_CLIENT_SECRET`
    - `OPENWEATHER_API_KEY`
 
-5. **Launch JARVIS**:
-   Use the provided startup scripts. These will run hardware and API validation checks before launching the UI.
+4. **Launch JARVIS**:
+   Use the provided launch scripts. These will run hardware and API validation checks before starting the UI.
    
-   **Windows**:
-   ```cmd
-   run_local.bat
-   ```
-   **Mac/Linux**:
-   ```bash
-   bash run_local.sh
-   ```
-   
-   *(Alternatively, run `streamlit run app.py` directly).*
+   **Windows**: `run_jarvis.bat`
+   **Mac/Linux**: `bash run_jarvis.sh`
 
 ### Using JARVIS
-- **Vision Panel**: Click "Start Camera". JARVIS processes every 5th frame for emotion detection to keep CPU usage low. Ensure your face is visible and well-lit. Use "Stop Camera" to release the hardware.
-- **Voice Panel**: Click "Start Recording", speak your command, and click "Stop Recording". JARVIS will transcribe it in the background and respond.
-- **Spotify**: Click "Play/Pause Music" from the sidebar. Note: Ensure Spotify is *open and active* on one of your devices so JARVIS can detect an active playback session.
-- **Autonomous Mode**: Toggle "Enable JARVIS Brain" in the sidebar. If JARVIS detects negative emotions continuously, a suggestion box will appear in the UI offering to play mood-specific music.
+- **Vision Panel**: Click "START Camera" to see the live feed. Click **"Analyze My Mood"** to trigger a Gemini-powered multimodal analysis. The system validates face presence locally before sending frames to the API.
+- **Voice Panel**: Click the microphone icon, speak your command, and click again to stop. JARVIS will transcribe and respond in the chat history.
+- **Spotify**: Click "Connect Spotify" if not already authenticated. JARVIS will offer music recommendations based on your analyzed mood.
+- **Autonomous Mode**: Toggle "Enable JARVIS Brain" in the sidebar. If JARVIS detects strong emotions, it will autonomously suggest music or actions to assist you.

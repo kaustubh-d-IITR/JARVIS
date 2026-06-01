@@ -23,3 +23,9 @@ Desktop.ini
 
 # Runtime artifacts
 temp_audio.wav
+
+# Additions
+captured_frames/
+logs/
+scratch/
+node_modules/

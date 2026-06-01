@@ -139,4 +139,23 @@ class SpotifyController:
         except Exception as e:
             return False, f"Pause error: {str(e)}"
 
+    def get_status(self) -> dict:
+        """Returns connection and device status for the UI."""
+        if not self.is_authenticated():
+            return {"connected": False, "user": None, "device": None}
+        
+        sp = self._get_client()
+        try:
+            user = sp.current_user().get("display_name", "User")
+            devices = sp.devices().get("devices", [])
+            active_device = next((d["name"] for d in devices if d["is_active"]), None)
+            return {
+                "connected": True,
+                "user": user,
+                "device": active_device,
+                "device_count": len(devices)
+            }
+        except Exception:
+            return {"connected": True, "user": "Connected", "device": "Unknown"}
+
 

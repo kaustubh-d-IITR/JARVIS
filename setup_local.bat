@@ -30,11 +30,10 @@ pip install --upgrade pip >nul 2>&1
 pip install -r requirements.txt
 
 echo [4/5] Verifying key files...
-if not exist "vision\fer_checkpoint.tar" (
+if not exist "vision\gemini_vision.py" (
     echo.
-    echo [WARNING] vision\fer_checkpoint.tar NOT FOUND!
-    echo          Download from Google Drive and place it at:
-    echo          JARVIS\vision\fer_checkpoint.tar
+    echo [ERROR] vision\gemini_vision.py NOT FOUND!
+    echo         Core vision component is missing.
     echo.
 )
 if not exist ".env" (

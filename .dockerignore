@@ -1,0 +1,15 @@
+.git
+.env
+__pycache__
+*.pyc
+captured_frames
+logs
+temp_audio
+cache
+node_modules
+venv
+.venv
+env
+.streamlit/cache
+.DS_Store
+Thumbs.db

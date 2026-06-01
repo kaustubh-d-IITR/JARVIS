@@ -27,12 +27,13 @@ class AutonomousController:
         
         self.lock = threading.Lock()
         
-    def update_state(self, emotion, confidence, posture, weather):
+    def update_state(self, emotion, confidence, posture, weather, face_detected=True):
         with self.lock:
             self.current_emotion = emotion
             self.current_confidence = confidence
             self.current_posture = posture
             self.current_weather = weather
+            self.face_detected = face_detected
             
     def start(self):
         """Starts the background loop."""
@@ -56,9 +57,12 @@ class AutonomousController:
                 confidence = self.current_confidence
                 posture = self.current_posture
                 weather = self.current_weather
+                face_detected = getattr(self, 'face_detected', True)
             
             # Use decision engine to see if an action should be suggested
-            decision = self.decision_engine.evaluate_autonomous_state(emotion, confidence, posture, weather)
+            decision = self.decision_engine.evaluate_autonomous_state(
+                emotion, confidence, posture, weather, face_detected
+            )
             
             if decision and decision.get("suggested_action"):
                 with self.lock:

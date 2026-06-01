@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  jarvis:
+    build: .
+    container_name: jarvis-ai
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./captured_frames:/app/captured_frames

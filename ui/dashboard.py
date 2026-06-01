@@ -2,6 +2,10 @@ import streamlit as st
 import asyncio
 import time
 import hashlib
+import os
+import cv2
+import numpy as np
+from PIL import Image
 from config.settings import settings
 from llm.groq_client import GroqClient
 from spotify.spotify_controller import SpotifyController
@@ -10,6 +14,7 @@ from logic.decision_engine import DecisionEngine
 from logic.autonomous_controller import AutonomousController
 from voice.transcriber import AudioTranscriber
 from vision.webrtc_processor import JarvisVideoProcessor
+from vision.vlm_emotion_analyzer import VLMEmotionAnalyzer
 
 # Conditional import — gracefully handle missing audio_recorder
 try:
@@ -17,7 +22,6 @@ try:
     _HAS_AUDIO_RECORDER = True
 except ImportError:
     _HAS_AUDIO_RECORDER = False
-
 
 def initialize_session_state():
     """Initialize all Streamlit session state variables to prevent reset on rerun."""
@@ -27,68 +31,128 @@ def initialize_session_state():
         st.session_state.groq = GroqClient()
         st.session_state.spotify = SpotifyController()
         st.session_state.weather_svc = WeatherService()
-
         st.session_state.decision_engine = DecisionEngine(st.session_state.groq, st.session_state.spotify)
         st.session_state.autonomous = AutonomousController(st.session_state.decision_engine)
+        st.session_state.video_processor = JarvisVideoProcessor()
+        st.session_state.emotion_analyzer = VLMEmotionAnalyzer()
 
         # State Tracking
         st.session_state.current_emotion = "neutral"
         st.session_state.emotion_confidence = 0.0
-        st.session_state.current_posture = "unknown"
         st.session_state.weather = st.session_state.weather_svc.get_weather()
-
         st.session_state.chat_history = []
         st.session_state.system_logs = []
         st.session_state.autonomous_mode = False
+        
+        # Voice State
         st.session_state.last_audio_hash = None
-        st.session_state.video_processor = JarvisVideoProcessor()
-
-        # Timing trackers
+        st.session_state.processing_voice = False
+        st.session_state.last_transcript = ""
         st.session_state.last_deepgram_ms = 0
         st.session_state.last_groq_ms = 0
 
+        # Pipeline State
+        st.session_state.pipeline_status = "idle" # idle, analyzing, finished, error
+        st.session_state.last_image_id = None
+        st.session_state.captured_image_path = None
+        st.session_state.vlm_result = None
+        st.session_state.groq_reasoning = ""
+        st.session_state.spotify_action = ""
+        st.session_state.api_latency = 0
+        st.session_state.pending_suggestion = None
+        
         st.session_state.initialized = True
-
 
 def log_system(msg: str):
     """Adds a message to the UI system logs."""
     ts = time.strftime("%H:%M:%S")
-    st.session_state.system_logs.insert(0, f"[{ts}] {msg}")
+    tag = "[SYSTEM]"
+    if "CAMERA" in msg.upper(): tag = "[CAMERA]"
+    elif "VLM" in msg.upper() or "VISION" in msg.upper(): tag = "[VLM]"
+    elif "GROQ" in msg.upper(): tag = "[GROQ]"
+    elif "SPOTIFY" in msg.upper(): tag = "[SPOTIFY]"
+    elif "WEATHER" in msg.upper(): tag = "[WEATHER]"
+    
+    st.session_state.system_logs.insert(0, f"{tag} {ts} {msg}")
     if len(st.session_state.system_logs) > 50:
         st.session_state.system_logs.pop()
 
-
-@st.cache_resource(show_spinner="Loading AI Vision Models... (This takes ~10 seconds on first boot)")
-def preload_models():
-    import numpy as np
-    from vision.emotion_detector import EmotionDetector
-    # Force PyTorch model to load weights on the main thread
-    detector = EmotionDetector()
-    detector.detect_emotion(np.zeros((224, 224, 3), dtype=np.uint8))
-    return True
-
-
 def _check_api_status():
-    """Returns dict of API availability for first-run UX."""
     return {
         "spotify": bool(settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET),
         "deepgram": bool(settings.DEEPGRAM_API_KEY),
         "groq": bool(settings.GROQ_API_KEY),
         "weather": bool(settings.OPENWEATHER_API_KEY),
+        "openrouter": bool(settings.OPENROUTER_API_KEY),
     }
 
+def process_snapshot(image_data):
+    """Trigger the AI pipeline after a browser-native snapshot is taken."""
+    vp = st.session_state.video_processor
+    analyzer = st.session_state.emotion_analyzer
+    engine = st.session_state.decision_engine
+    
+    st.session_state.pipeline_status = "analyzing"
+    log_system("CAMERA: Snapshot received from browser.")
+    
+    # 1. Save Image
+    path = vp.save_snapshot(image_data)
+    st.session_state.captured_image_path = path
+    
+    # 2. VLM Multimodal Analysis
+    log_system("VLM: Reasoning about visual mood...")
+    result = analyzer.analyze_snapshot(image_data)
+    
+    if not result or "error" in result:
+        log_system(f"VLM: Analysis failed. Falling back to weather.")
+        st.session_state.pipeline_status = "error"
+        st.session_state.vlm_result = result
+        # Fallback trigger logic
+        decision = engine.evaluate_autonomous_state(
+            emotion="neutral", confidence=0, posture="unknown", 
+            weather=st.session_state.weather, face_detected=False
+        )
+        st.session_state.groq_reasoning = "Vision reasoning failed. Falling back to environmental context."
+        st.session_state.spotify_action = f"Fallback: {decision.get('query')}"
+        return
+
+    st.session_state.vlm_result = result
+    st.session_state.current_emotion = result.get("emotion", "neutral")
+    st.session_state.emotion_confidence = result.get("confidence", 0.0)
+    st.session_state.api_latency = result.get("api_latency_ms", 0)
+    
+    # 3. Decision & Spotify
+    log_system(f"VLM: Emotion detected = {st.session_state.current_emotion}")
+    log_system("GROQ: Interpreting mood and reasoning...")
+    decision = engine.evaluate_autonomous_state(
+        emotion=result.get("emotion", "neutral"),
+        confidence=result.get("confidence", 0.0),
+        posture=result.get("reasoning", "unknown"),
+        weather=st.session_state.weather,
+        face_detected=result.get("face_detected", False)
+    )
+    
+    st.session_state.groq_reasoning = decision.get("message", "No clear suggestion.")
+    
+    if decision.get("suggested_action") == "play_music":
+        log_system(f"SPOTIFY: Recommending {decision['query']}...")
+        st.session_state.spotify_action = f"Recommendation: {decision['query']}"
+        st.session_state.pending_suggestion = decision
+    else:
+        st.session_state.spotify_action = "No action suggested."
+        
+    st.session_state.pipeline_status = "finished"
+    log_system("PIPELINE: Snapshot analysis complete.")
 
 def render_dashboard():
-    st.set_page_config(page_title="JARVIS AI Assistant", layout="wide", initial_sidebar_state="expanded")
-    preload_models()
+    st.set_page_config(page_title="JARVIS AI Multimodal Assistant", layout="wide", initial_sidebar_state="expanded")
     initialize_session_state()
-
     api_status = _check_api_status()
 
     # Handle Spotify OAuth callback
-    query_params = st.query_params
-    if "code" in query_params:
-        code = query_params["code"]
+    params = st.query_params
+    if "code" in params:
+        code = params["code"]
         spotify = st.session_state.get("spotify")
         if spotify and not spotify.is_authenticated():
             success = spotify.handle_callback(code)
@@ -102,38 +166,40 @@ def render_dashboard():
     # ------------------
     with st.sidebar:
         st.title("⚙️ Control Panel")
-
-        # Autonomous Toggle
         st.subheader("🧠 Autonomous Mode")
         auto_toggle = st.toggle("Enable JARVIS Brain", value=st.session_state.autonomous_mode)
-
         if auto_toggle and not st.session_state.autonomous_mode:
             st.session_state.autonomous.start()
             st.session_state.autonomous_mode = True
-            log_system("Autonomous mode started.")
+            log_system("AUTONOMOUS: Brain activated.")
         elif not auto_toggle and st.session_state.autonomous_mode:
             st.session_state.autonomous.stop()
             st.session_state.autonomous_mode = False
-            log_system("Autonomous mode stopped.")
+            log_system("AUTONOMOUS: Brain deactivated.")
 
         st.divider()
         st.subheader("🎶 Spotify")
         if api_status["spotify"]:
             spotify = st.session_state.get("spotify")
             if spotify:
-                if spotify.is_authenticated():
-                    st.success("Spotify connected")
+                status = spotify.get_status()
+                if status["connected"]:
+                    st.success(f"Connected: {status['user']} ✅")
+                    if status["device"]:
+                        st.caption(f"🎧 Playing on: {status['device']}")
+                    else:
+                        st.warning("No active device found")
+                        st.caption("Open Spotify on your phone/PC")
                 else:
+                    st.warning("Spotify not connected ⚠️")
                     auth_url = spotify.get_auth_url()
                     if auth_url:
-                        st.warning("Spotify not connected")
-                        st.markdown(f"[Connect Spotify]({auth_url})")
-                        st.caption("Click above, then come back here after authorizing.")
+                        st.markdown(f"[**CONNECT SPOTIFY**]({auth_url})")
         else:
-            st.error("🔒 Spotify disabled — SPOTIFY_CLIENT_ID / SECRET missing in .env")
-
+            st.error("🔒 Spotify disabled")
+        
         st.divider()
-        st.subheader("🖥️ System Logs")
+        st.subheader("📋 System Monitor")
         log_container = st.container(height=300)
         for log in st.session_state.system_logs:
             log_container.text(log)
@@ -141,40 +207,26 @@ def render_dashboard():
     # ------------------
     # MAIN BODY
     # ------------------
-    st.title("🤖 JARVIS")
-
-    # First-run warnings with graceful feature disabling
-    missing_keys = []
-    for key_name, available in api_status.items():
-        if not available:
-            missing_keys.append(key_name.upper())
-    if missing_keys:
-        st.warning(f"⚠️ Missing API keys: {', '.join(missing_keys)} — some features disabled.")
-        with st.expander("Show .env Debug Info"):
-            st.json(settings.DEBUG_INFO)
-
-    # Weather Widget
-    w = st.session_state.weather
+    st.title("🤖 JARVIS AI Multimodal Assistant")
+    
+    # Weather Context
     if api_status["weather"]:
-        st.info(f"⛅ Context: Location={settings.LOCATION} | "
-                f"Temp={w.get('temperature')}°C | Condition={w.get('condition')}")
-    else:
-        st.caption("⛅ Weather API not configured — using defaults.")
+        w = st.session_state.weather
+        st.caption(f"⛅ Context: {settings.LOCATION} | {w.get('temperature')}°C | {w.get('condition')}")
 
     # Autonomous Suggestion Alerts
-    if st.session_state.autonomous_mode:
+    if st.session_state.get("autonomous_mode"):
         suggestion = st.session_state.autonomous.get_and_clear_suggestion()
         if suggestion:
             st.session_state.pending_suggestion = suggestion
 
-    if hasattr(st.session_state, 'pending_suggestion') and st.session_state.pending_suggestion:
+    if st.session_state.get("pending_suggestion"):
         s = st.session_state.pending_suggestion
         st.success(f"💡 **JARVIS Suggestion:** {s['message']}")
         col_sugg1, col_sugg2, _ = st.columns([1, 1, 8])
         with col_sugg1:
             if st.button("Accept", key="accept_sugg", type="primary"):
                 st.session_state.spotify.play_music(query=s["query"])
-                log_system(f"Accepted suggestion. Played {s['query']}")
                 st.session_state.pending_suggestion = None
                 st.rerun()
         with col_sugg2:
@@ -182,270 +234,165 @@ def render_dashboard():
                 st.session_state.pending_suggestion = None
                 st.rerun()
 
-    # ------------------
-    # LOCAL USER PERCEPTION
-    # ------------------
-    st.subheader("👁️ Live Local Perception")
+    st.divider()
 
-    col_vision, col_chat = st.columns([1, 1])
+    # Pipeline Layout
+    col_main, col_monitor = st.columns([1.2, 1])
 
-    with col_vision:
-        # Ensure video_processor exists
-        if "video_processor" not in st.session_state:
-            st.session_state.video_processor = JarvisVideoProcessor()
-        vp = st.session_state.video_processor
+    with col_main:
+        st.subheader("📸 Mood Snapshot")
+        cam_image = st.camera_input("Take a snapshot for JARVIS to analyze your mood")
+        
+        if cam_image:
+            img_id = hashlib.md5(cam_image.getvalue()).hexdigest()
+            if st.session_state.get("last_image_id") != img_id:
+                st.session_state.last_image_id = img_id
+                process_snapshot(cam_image)
+                st.rerun()
 
-        # Camera control buttons
-        col_start, col_stop = st.columns([1, 1])
-        with col_start:
-            if not vp._running:
-                if st.button("▶ START Camera", type="primary", key="cam_start"):
-                    vp.start()
-                    st.rerun()
-        with col_stop:
-            if vp._running:
-                if st.button("⏹ STOP Camera", key="cam_stop"):
-                    vp.stop()
-                    st.rerun()
+        if st.session_state.pipeline_status == "analyzing":
+            st.warning(f"🔄 VLM Multimodal Reasoning ({settings.VLM_MODEL})... Please wait.")
+        elif st.session_state.pipeline_status == "finished":
+            st.success("✅ Analysis Complete.")
+            if st.session_state.captured_image_path:
+                st.image(st.session_state.captured_image_path, caption="Analyzed Snapshot", use_container_width=True)
+        elif st.session_state.pipeline_status == "error":
+            st.error("❌ Perception Pipeline Failed.")
 
-        # Live feed + metrics — MUST be in same fragment to update together
-        @st.fragment(run_every=0.5)
-        def render_live_feed():
-            if "video_processor" not in st.session_state:
-                return
-            vp = st.session_state.video_processor
-
-            if not vp._running:
-                # Check if there's an error message from a failed start
-                debug = vp.get_debug_state()
-                if debug.get("error"):
-                    st.error(f"Camera Error: {debug['error']}")
-                return
-
-            # Get and display frame
-            frame = vp.get_frame()
-            if frame is not None:
-                st.image(
-                    frame,
-                    channels="RGB",
-                    use_container_width=True,
-                )
+    with col_monitor:
+        st.subheader("🔍 AI Pipeline Monitor")
+        tab_snapshot, tab_vlm, tab_groq, tab_spotify = st.tabs([
+            "📸 Snapshot", "🧠 Vision LLM", "🧠 Groq", "🎶 Spotify"
+        ])
+        
+        with tab_snapshot:
+            if st.session_state.captured_image_path:
+                st.markdown(f"**Source:** Browser Snapshot")
+                st.markdown(f"**Path:** `{os.path.basename(st.session_state.captured_image_path)}`")
             else:
-                st.info("⏳ Initializing camera and loading AI model...")
-                return
+                st.caption("Capture a snapshot to begin.")
 
-            # Get state and display metrics
-            emotion, conf, posture = vp.get_state()
+        with tab_vlm:
+            res = st.session_state.vlm_result
+            if res and "error" not in res:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Primary", res.get('primary_emotion', 'N/A').upper())
+                col2.metric("Secondary", res.get('secondary_emotion', 'N/A'))
+                col3.metric("Confidence", f"{res.get('confidence', 0):.1%}")
+                
+                st.divider()
+                st.markdown("**Detected Facial Cues:**")
+                cues = res.get("facial_cues", [])
+                if cues:
+                    st.write(", ".join([f"• {c}" for c in cues]))
+                
+                st.divider()
+                st.markdown(f"**Mood Summary:** {res.get('mood_summary')}")
+                st.caption(f"**Music Vibe:** {res.get('music_vibe')} | Latency: {st.session_state.api_latency}ms")
+                
+                provider_error = res.get("provider_error")
+                if provider_error:
+                    st.error(f"VLM Provider Issue: {provider_error}")
+            elif res and "error" in res:
+                st.error(f"VLM Error: {res['error']}")
+            else:
+                st.caption("Waiting for analysis...")
 
-            # Update session state
-            st.session_state.current_emotion = emotion
-            st.session_state.emotion_confidence = conf
-            st.session_state.current_posture = posture
+        with tab_groq:
+            if st.session_state.groq_reasoning:
+                st.markdown("**Interpreted Context**")
+                st.info(st.session_state.groq_reasoning)
+            else:
+                st.caption("Waiting for reasoning...")
 
-            # Update autonomous controller
-            if "autonomous" in st.session_state:
-                st.session_state.autonomous.update_state(
-                    emotion=emotion,
-                    confidence=conf,
-                    posture=posture,
-                    weather=st.session_state.get("weather", {})
-                )
+        with tab_spotify:
+            if st.session_state.spotify_action:
+                st.success(st.session_state.spotify_action)
+                if st.session_state.spotify:
+                    stat = st.session_state.spotify.get_status()
+                    if stat.get("device"):
+                        st.caption(f"Target Device: {stat['device']}")
+            else:
+                st.caption("No action decided yet.")
 
-            # Display metrics
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Emotion", emotion.capitalize())
-            col2.metric("Confidence", f"{conf:.0%}")
-            col3.metric("Posture", posture.capitalize())
-
-            st.caption(f"Dominant emotion over last 3 seconds: "
-                       f"**{emotion}** at {conf:.0%} confidence")
-        render_live_feed()
-
-        st.divider()
-
-        # ── VOICE RECORDING ──
-        st.subheader("🎙️ Speak to JARVIS")
-
-        # Graceful degradation if APIs are missing
-        if not api_status["deepgram"]:
-            st.error("🔒 Voice disabled — DEEPGRAM_API_KEY missing in .env")
-        elif not _HAS_AUDIO_RECORDER:
-            st.error("🔒 Voice disabled — audio_recorder_streamlit not installed")
-        else:
+    st.divider()
+    
+    # Voice Section
+    col_voice, col_chat = st.columns([1, 1])
+    with col_voice:
+        st.subheader("🎙️ Voice Command")
+        if _HAS_AUDIO_RECORDER:
             audio_bytes = audio_recorder(
                 text="Click to record",
                 recording_color="#e74c3c",
                 neutral_color="#27ae60",
-                icon_name="microphone",
                 icon_size="2x",
-                pause_threshold=3.0,
-                sample_rate=16000,
-                energy_threshold=0.05
+                pause_threshold=3.0
             )
-            st.caption("🎙️ Click mic → speak your command → click again to stop. "
-                       "For best results, lower speaker volume while recording.")
-
-            # Show last transcript
-            last_transcript = st.session_state.get("last_transcript", "")
-            if last_transcript:
-                st.markdown("**🎙️ JARVIS heard:**")
-                st.info(f'"{last_transcript}"')
-            else:
-                st.caption("Your voice command will appear here after recording.")
-
-            # Reject recordings too short
-            if audio_bytes is not None and len(audio_bytes) < 8000:
-                audio_bytes = None
-
-            # Prevent concurrent processing
-            if st.session_state.get("processing_voice", False):
-                st.info("Processing previous command...")
-            elif audio_bytes:
+            
+            if audio_bytes and not st.session_state.get("processing_voice", False):
                 audio_hash = hashlib.md5(audio_bytes).hexdigest()
                 if st.session_state.get('last_audio_hash') != audio_hash:
                     st.session_state.last_audio_hash = audio_hash
                     st.session_state.processing_voice = True
-                    st.session_state.last_transcript = "⏳ Transcribing..."
+                    log_system("VOICE: Processing command...")
+                    
                     try:
-                        log_system("Voice received. Processing...")
                         with open("temp_audio.wav", "wb") as f:
                             f.write(audio_bytes)
 
                         t0 = time.perf_counter()
-                        with st.spinner("Transcribing via Deepgram..."):
-                            transcript = asyncio.run(
-                                st.session_state.transcriber.transcribe_audio_async("temp_audio.wav")
-                            )
+                        transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async("temp_audio.wav"))
                         st.session_state.last_deepgram_ms = round((time.perf_counter() - t0) * 1000)
-
                         st.session_state.last_transcript = transcript
 
-                        if transcript and transcript.strip() and not transcript.startswith("Error"):
+                        if transcript and not transcript.startswith("Error"):
                             st.session_state.chat_history.append({"role": "user", "text": transcript})
-
+                            
                             t1 = time.perf_counter()
-                            with st.spinner("JARVIS is thinking..."):
-                                result = st.session_state.decision_engine.process_voice_command(
-                                    text=transcript,
-                                    emotion=st.session_state.current_emotion,
-                                    posture=st.session_state.current_posture,
-                                    weather=st.session_state.weather
-                                )
+                            result = st.session_state.decision_engine.process_voice_command(
+                                text=transcript,
+                                emotion=st.session_state.current_emotion,
+                                posture="unknown",
+                                weather=st.session_state.weather
+                            )
                             st.session_state.last_groq_ms = round((time.perf_counter() - t1) * 1000)
-
-                            st.session_state.chat_history.append({"role": "jarvis", "text": result["response"]})
-                            if result.get("action_msg"):
-                                log_system(f"Action: {result['action_msg']}")
-                        else:
-                            log_system("Voice recording was empty or unclear. Try again.")
+                            st.session_state.chat_history.append({"role": "assistant", "text": result["response"]})
+                            log_system("GROQ: Voice command processed.")
                     finally:
                         st.session_state.processing_voice = False
                     st.rerun()
-
+                
     with col_chat:
-        # Chat History
-        st.subheader("💬 Interaction History")
-        chat_container = st.container(height=500)
+        st.subheader("💬 Chat History")
+        chat_container = st.container(height=300)
         for chat in st.session_state.chat_history:
-            if chat["role"] == "user":
-                chat_container.chat_message("user").write(f"🎙️ {chat['text']}")
-            else:
-                chat_container.chat_message("assistant").write(chat["text"])
+            chat_container.chat_message(chat["role"]).write(chat["text"])
 
     # ============================
     # DEVELOPER DEBUG PANEL
     # ============================
     with st.expander("🔧 Developer Debug Panel", expanded=False):
-        tab_vision, tab_voice, tab_services, tab_state = st.tabs([
-            "👁️ Vision", "🎙️ Voice", "🔌 Services", "📊 Full State"
-        ])
+        tab_v, tab_v2, tab_s, tab_st = st.tabs(["👁️ Vision VLM", "🎙️ Voice", "🔌 Services", "📊 State"])
 
-        with tab_vision:
-            vp = st.session_state.get("video_processor")
-            if vp:
-                debug = vp.get_debug_state()
-                col_d1, col_d2, col_d3 = st.columns(3)
-                col_d1.metric("Camera FPS", f"{debug['fps']}")
-                col_d2.metric("Inference", f"{debug['inference_ms']}ms")
-                col_d3.metric("Frames", f"{debug['frame_count']}")
+        with tab_v:
+            st.json(st.session_state.emotion_analyzer.get_debug_state())
+            if st.session_state.get("vlm_result"):
+                st.divider()
+                st.json(st.session_state.vlm_result)
 
-                col_d4, col_d5, col_d6 = st.columns(3)
-                col_d4.metric("Face Detected", "✅" if debug['face_detected'] else "❌")
-                col_d5.metric("Buffer Fill", f"{debug['buffer_size']}/{debug['buffer_max']}")
-                col_d6.metric("Uptime", f"{debug['uptime_seconds']}s")
+        with tab_v2:
+            st.metric("Deepgram Latency", f"{st.session_state.get('last_deepgram_ms', 0)}ms")
+            st.metric("Groq Latency", f"{st.session_state.get('last_groq_ms', 0)}ms")
+            st.info(f"Last Transcript: {st.session_state.get('last_transcript')}")
 
-                # Majority vote breakdown
-                st.markdown("**Emotion Vote Buffer:**")
-                votes = debug.get("vote_counts", {})
-                if votes:
-                    for emo, count in sorted(votes.items(), key=lambda x: -x[1]):
-                        pct = count / max(debug["buffer_size"], 1)
-                        st.progress(pct, text=f"{emo}: {count} votes ({pct:.0%})")
-                else:
-                    st.caption("No votes yet — start camera first.")
+        with tab_s:
+            st.json(api_status)
+            if st.session_state.get("spotify"):
+                st.write(st.session_state.spotify.get_status())
 
-                # Raw probabilities toggle
-                show_probs = st.checkbox("Show Raw FER Probabilities", key="show_fer_probs")
-                if show_probs and vp._running:
-                    frame = vp.get_frame()
-                    if frame is not None and vp._emotion_detector:
-                        import cv2
-                        bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                        probs = vp._emotion_detector.get_all_probabilities(bgr_frame)
-                        st.markdown("**Live FER Probabilities:**")
-                        for emo in ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']:
-                            p = probs.get(emo, 0.0)
-                            st.progress(min(p, 1.0), text=f"{emo}: {p:.1%}")
+        with tab_st:
+            st.write(st.session_state)
 
-                st.json(debug)
-            else:
-                st.caption("Video processor not initialized.")
-
-        with tab_voice:
-            st.metric("Last Deepgram Latency", f"{st.session_state.get('last_deepgram_ms', 0)}ms")
-            st.metric("Last Groq Latency", f"{st.session_state.get('last_groq_ms', 0)}ms")
-            st.markdown("**Last Transcript:**")
-            st.code(st.session_state.get("last_transcript", "(none)"))
-            st.markdown("**Processing Lock:**")
-            st.code(f"processing_voice = {st.session_state.get('processing_voice', False)}")
-
-        with tab_services:
-            st.markdown("**API Status:**")
-            for name, available in api_status.items():
-                if available:
-                    st.success(f"✅ {name.upper()} — configured")
-                else:
-                    st.error(f"❌ {name.upper()} — missing API key")
-
-            st.divider()
-            st.markdown("**Spotify Auth:**")
-            spotify = st.session_state.get("spotify")
-            if spotify:
-                st.code(f"authenticated = {spotify.is_authenticated()}")
-
-            st.markdown("**Autonomous Controller:**")
-            auto = st.session_state.get("autonomous")
-            if auto:
-                st.code(f"running = {auto.is_running}\n"
-                        f"cooldown = {auto.cooldown}s\n"
-                        f"last_action = {auto.last_action_time}")
-
-            st.markdown("**Weather Data:**")
-            st.json(st.session_state.get("weather", {}))
-
-        with tab_state:
-            st.markdown("**Full Session State Keys:**")
-            state_keys = {}
-            for key in sorted(st.session_state.keys()):
-                val = st.session_state[key]
-                if isinstance(val, (str, int, float, bool, type(None))):
-                    state_keys[key] = val
-                elif isinstance(val, (list, dict)):
-                    state_keys[key] = f"({type(val).__name__}, len={len(val)})"
-                else:
-                    state_keys[key] = f"<{type(val).__name__}>"
-            st.json(state_keys)
-
-            st.markdown("**System Logs (last 50):**")
-            for log in st.session_state.get("system_logs", []):
-                st.text(log)
+if __name__ == "__main__":
+    render_dashboard()
