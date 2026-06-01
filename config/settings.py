@@ -50,13 +50,6 @@ class Settings:
             return ""
         
     @property
-    def OPENROUTER_API_KEY(self):
-        try:
-            return st.session_state.get("OPENROUTER_API_KEY", "")
-        except Exception:
-            return ""
-
-    @property
     def GEMINI_API_KEY(self):
         try:
             return st.session_state.get("GEMINI_API_KEY", "")
@@ -65,12 +58,10 @@ class Settings:
 
     @property
     def OPENWEATHER_API_KEY(self):
-        return os.getenv("OPENWEATHER_API_KEY", "")
-
-    @property
-    def VLM_MODEL(self):
-        # Reverting to confirmed working model
-        return "nvidia/nemotron-nano-12b-v2-vl:free"
+        try:
+            return st.session_state.get("OPENWEATHER_API_KEY", "")
+        except Exception:
+            return ""
         
     @property
     def LOCATION(self):

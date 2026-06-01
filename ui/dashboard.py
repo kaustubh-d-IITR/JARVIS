@@ -82,8 +82,7 @@ def _check_api_status():
         "spotify": bool(settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET),
         "deepgram": bool(settings.DEEPGRAM_API_KEY),
         "groq": bool(settings.GROQ_API_KEY),
-        "weather": bool(settings.OPENWEATHER_API_KEY),
-        "openrouter": bool(settings.OPENROUTER_API_KEY),
+        "weather": bool(settings.OPENWEATHER_API_KEY)
     }
 
 def process_snapshot(image_data):
@@ -156,17 +155,27 @@ def render_dashboard():
                 gemini_key = st.text_input("Gemini API Key", type="password")
                 groq_key = st.text_input("Groq API Key", type="password")
                 deepgram_key = st.text_input("Deepgram API Key", type="password")
-                openrouter_key = st.text_input("OpenRouter API Key", type="password")
+                openweather_key = st.text_input("OpenWeather API Key", type="password")
                 
-                submitted = st.form_submit_button("Verify Credentials")
+                submitted = st.form_submit_button("Verify Credentials & Connect Spotify")
                 if submitted:
-                    if gemini_key and groq_key and deepgram_key and openrouter_key:
+                    if gemini_key and groq_key and deepgram_key and openweather_key:
                         st.session_state.GEMINI_API_KEY = gemini_key
                         st.session_state.GROQ_API_KEY = groq_key
                         st.session_state.DEEPGRAM_API_KEY = deepgram_key
-                        st.session_state.OPENROUTER_API_KEY = openrouter_key
+                        st.session_state.OPENWEATHER_API_KEY = openweather_key
                         st.session_state.keys_validated = True
-                        st.rerun()
+                        
+                        from spotify.spotify_controller import SpotifyController
+                        temp_spotify = SpotifyController()
+                        auth_url = temp_spotify.get_auth_url()
+                        
+                        if auth_url:
+                            import streamlit.components.v1 as components
+                            components.html(f"<script>window.location.href='{auth_url}';</script>", height=0)
+                        else:
+                            st.error("Spotify is disabled (missing dev credentials). Keys verified anyway.")
+                            st.rerun()
                     else:
                         st.error("Please provide all four API keys.")
         else:
@@ -184,7 +193,7 @@ def render_dashboard():
         st.markdown("- ✓ **Gemini API Key**")
         st.markdown("- ✓ **Groq API Key**")
         st.markdown("- ✓ **Deepgram API Key**")
-        st.markdown("- ✓ **OpenRouter API Key**")
+        st.markdown("- ✓ **OpenWeather API Key**")
         st.info("Please enter your API keys in the sidebar to unlock Camera, Voice, Emotion Detection, and Spotify Features.")
         return
 
@@ -293,7 +302,7 @@ def render_dashboard():
                 st.rerun()
 
         if st.session_state.pipeline_status == "analyzing":
-            st.warning(f"🔄 VLM Multimodal Reasoning ({settings.VLM_MODEL})... Please wait.")
+            st.warning("🔄 Gemini Vision Reasoning... Please wait.")
         elif st.session_state.pipeline_status == "finished":
             st.success("✅ Analysis Complete.")
             if st.session_state.captured_image_path:
