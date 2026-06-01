@@ -169,8 +169,12 @@ class DecisionEngine:
         
         # ── CASE 1: No Face Detected -> Weather Fallback ──
         if not face_detected:
-            condition = weather.get('condition', '').lower()
-            temp = weather.get('temperature', 20)
+            condition = str(weather.get('condition', '')).lower()
+            try:
+                temp = float(weather.get('temperature', 20))
+            except (TypeError, ValueError):
+                temp = 20.0
+            
             
             if 'rain' in condition or 'drizzle' in condition:
                 msg = "It's raining outside. How about some calm Lo-Fi music?"
@@ -193,7 +197,14 @@ class DecisionEngine:
             }
 
         # ── CASE 2: Low Confidence -> Clarify ──
-        if confidence < THRESHOLD:
+        try:
+            conf_val = float(confidence)
+            thresh_val = float(THRESHOLD)
+        except (TypeError, ValueError):
+            conf_val = 0.0
+            thresh_val = 0.70
+            
+        if conf_val < thresh_val:
             if emotion in ["sad", "angry", "excited"]:
                 return {
                     "suggested_action": "clarify",

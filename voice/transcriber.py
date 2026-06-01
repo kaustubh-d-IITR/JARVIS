@@ -102,7 +102,8 @@ class AudioTranscriber:
                 try:
                     words = result["results"]["channels"][0]["alternatives"][0].get("words", [])
                     if words:
-                        avg_confidence = sum(w.get("confidence", 1.0) for w in words) / len(words)
+                        # Ensure words are floats for safe mathematical operation
+                        avg_confidence = sum(float(w.get("confidence", 1.0)) for w in words) / len(words)
                         if avg_confidence < 0.55:
                             # Low confidence = likely picking up background music
                             logger.info(f"Rejecting transcript (low confidence: {avg_confidence:.2f})")

@@ -116,9 +116,19 @@ def process_snapshot(image_data):
         return
 
     st.session_state.vlm_result = result
-    st.session_state.current_emotion = result.get("emotion", "neutral")
-    st.session_state.emotion_confidence = result.get("confidence", 0.0)
-    st.session_state.api_latency = result.get("api_latency_ms", 0)
+    try:
+        conf_val = float(result.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf_val = 0.0
+        
+    try:
+        lat_val = int(result.get("api_latency_ms", 0))
+    except (TypeError, ValueError):
+        lat_val = 0
+
+    st.session_state.current_emotion = str(result.get("emotion", "neutral"))
+    st.session_state.emotion_confidence = conf_val
+    st.session_state.api_latency = lat_val
     
     # 3. Decision & Spotify
     log_system(f"VLM: Emotion detected = {st.session_state.current_emotion}")
@@ -329,7 +339,11 @@ def render_dashboard():
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Primary", res.get('primary_emotion', 'N/A').upper())
                 col2.metric("Secondary", res.get('secondary_emotion', 'N/A'))
-                col3.metric("Confidence", f"{res.get('confidence', 0):.1%}")
+                try:
+                    display_conf = float(res.get('confidence', 0))
+                except (TypeError, ValueError):
+                    display_conf = 0.0
+                col3.metric("Confidence", f"{display_conf:.1%}")
                 
                 st.divider()
                 st.markdown("**Detected Facial Cues:**")

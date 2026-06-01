@@ -30,10 +30,16 @@ class AutonomousController:
     def update_state(self, emotion, confidence, posture, weather, face_detected=True):
         with self.lock:
             self.current_emotion = emotion
-            self.current_confidence = confidence
-            self.current_posture = posture
-            self.current_weather = weather
-            self.face_detected = face_detected
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = 0.0
+                
+            if face_detected:
+                self.current_confidence = confidence
+                self.current_posture = posture
+                self.current_weather = weather
+                self.face_detected = face_detected
             
     def start(self):
         """Starts the background loop."""
