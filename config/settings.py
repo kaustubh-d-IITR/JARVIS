@@ -16,6 +16,8 @@ def reload_env():
     result = load_dotenv(env_path, override=True)
     DEBUG_INFO['dotenv_loaded'] = result
 
+import streamlit as st
+
 class Settings:
     def __init__(self):
         reload_env()
@@ -35,19 +37,35 @@ class Settings:
         
     @property
     def DEEPGRAM_API_KEY(self):
-        return os.getenv("DEEPGRAM_API_KEY", "")
+        try:
+            return st.session_state.get("DEEPGRAM_API_KEY", "")
+        except Exception:
+            return ""
         
     @property
     def GROQ_API_KEY(self):
-        return os.getenv("GROQ_API_KEY", "")
+        try:
+            return st.session_state.get("GROQ_API_KEY", "")
+        except Exception:
+            return ""
         
+    @property
+    def OPENROUTER_API_KEY(self):
+        try:
+            return st.session_state.get("OPENROUTER_API_KEY", "")
+        except Exception:
+            return ""
+
+    @property
+    def GEMINI_API_KEY(self):
+        try:
+            return st.session_state.get("GEMINI_API_KEY", "")
+        except Exception:
+            return ""
+
     @property
     def OPENWEATHER_API_KEY(self):
         return os.getenv("OPENWEATHER_API_KEY", "")
-
-    @property
-    def OPENROUTER_API_KEY(self):
-        return os.getenv("OPENROUTER_API_KEY", "")
 
     @property
     def VLM_MODEL(self):

@@ -120,7 +120,7 @@ class VLMEmotionAnalyzer:
             return self._get_safe_fallback_schema(reason)
 
     def _run_gemini_fallback(self, img: Image.Image, prompt: str) -> dict:
-        gemini_key = os.getenv("GEMINI_API_KEY")
+        gemini_key = settings.GEMINI_API_KEY
 
         print("=" * 60)
         print("[GEMINI DEBUG] ENV CHECK")

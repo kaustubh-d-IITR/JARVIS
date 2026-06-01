@@ -19,14 +19,11 @@ class JarvisVideoProcessor:
     def save_snapshot(self, image_data) -> str:
         """
         Saves a snapshot from st.camera_input to the session directory.
+        Overwrites a single file to prevent Streamlit Cloud storage bloat.
         Returns the absolute path to the saved image.
         """
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_dir = os.path.join(self.output_dir, f"session_{timestamp}")
-            os.makedirs(session_dir, exist_ok=True)
-            
-            file_path = os.path.join(session_dir, "raw_capture.jpg")
+            file_path = os.path.join(self.output_dir, "latest_snapshot.jpg")
             
             # image_data is a UploadedFile-like object from st.camera_input
             img = Image.open(image_data)

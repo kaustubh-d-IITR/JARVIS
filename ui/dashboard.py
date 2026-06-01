@@ -146,6 +146,48 @@ def process_snapshot(image_data):
 
 def render_dashboard():
     st.set_page_config(page_title="JARVIS AI Multimodal Assistant", layout="wide", initial_sidebar_state="expanded")
+
+    keys_valid = st.session_state.get("keys_validated", False)
+    
+    with st.sidebar:
+        st.title("🔑 AI Credentials")
+        if not keys_valid:
+            with st.form("api_keys_form"):
+                gemini_key = st.text_input("Gemini API Key", type="password")
+                groq_key = st.text_input("Groq API Key", type="password")
+                deepgram_key = st.text_input("Deepgram API Key", type="password")
+                openrouter_key = st.text_input("OpenRouter API Key", type="password")
+                
+                submitted = st.form_submit_button("Verify Credentials")
+                if submitted:
+                    if gemini_key and groq_key and deepgram_key and openrouter_key:
+                        st.session_state.GEMINI_API_KEY = gemini_key
+                        st.session_state.GROQ_API_KEY = groq_key
+                        st.session_state.DEEPGRAM_API_KEY = deepgram_key
+                        st.session_state.OPENROUTER_API_KEY = openrouter_key
+                        st.session_state.keys_validated = True
+                        st.rerun()
+                    else:
+                        st.error("Please provide all four API keys.")
+        else:
+            st.success("API Keys Verified ✅")
+            if st.button("Reset Keys"):
+                st.session_state.keys_validated = False
+                st.session_state.initialized = False
+                st.rerun()
+
+        st.divider()
+
+    if not keys_valid:
+        st.title("🤖 Welcome to JARVIS")
+        st.markdown("### To continue, provide:")
+        st.markdown("- ✓ **Gemini API Key**")
+        st.markdown("- ✓ **Groq API Key**")
+        st.markdown("- ✓ **Deepgram API Key**")
+        st.markdown("- ✓ **OpenRouter API Key**")
+        st.info("Please enter your API keys in the sidebar to unlock Camera, Voice, Emotion Detection, and Spotify Features.")
+        return
+
     initialize_session_state()
     api_status = _check_api_status()
 
@@ -162,7 +204,7 @@ def render_dashboard():
                 st.rerun()
 
     # ------------------
-    # SIDEBAR
+    # REST OF SIDEBAR
     # ------------------
     with st.sidebar:
         st.title("⚙️ Control Panel")
@@ -338,11 +380,13 @@ def render_dashboard():
                     log_system("VOICE: Processing command...")
                     
                     try:
-                        with open("temp_audio.wav", "wb") as f:
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
                             f.write(audio_bytes)
+                            temp_audio_path = f.name
 
                         t0 = time.perf_counter()
-                        transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async("temp_audio.wav"))
+                        transcript = asyncio.run(st.session_state.transcriber.transcribe_audio_async(temp_audio_path))
                         st.session_state.last_deepgram_ms = round((time.perf_counter() - t0) * 1000)
                         st.session_state.last_transcript = transcript
 
